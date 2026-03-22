@@ -34,6 +34,7 @@ class ArcticSpaBoostButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity
 
     _attr_has_entity_name = True
     _attr_name = "Boost"
+    _attr_icon = "mdi:rocket-launch"
 
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -58,6 +59,7 @@ class ArcticSpaEasyModeButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEnt
 
     _attr_has_entity_name = True
     _attr_name = "Easy Mode"
+    _attr_icon = "mdi:waves-arrow-up"
 
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
