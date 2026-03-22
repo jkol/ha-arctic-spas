@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Arctic Spa",
+        "description": "Enter your Arctic Spa API key. You can manage API keys at https://myarcticspa.com/spa/SpaAPIManagement.aspx",
+        "data": {
+          "api_key": "API Key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the Arctic Spa API. Check your network and try again.",
+      "invalid_auth": "Invalid API key. Please check your key and try again."
+    },
+    "abort": {
+      "already_configured": "This spa is already configured."
+    }
+  }
+}
