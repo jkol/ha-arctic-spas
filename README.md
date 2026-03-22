@@ -11,11 +11,11 @@ A HACS-compatible Home Assistant integration for [Arctic Spas](https://www.arcti
 | Platform | Entities | Notes |
 |---|---|---|
 | **Climate** | Water temperature control | Set target temp; current temp display |
-| **Binary Sensor** | Connected | Spa online/offline status |
-| **Sensor** | Water temp, setpoint, pH, chlorine (ORP), filter status/duration/frequency, errors | pH & ORP require Spa Boy® |
-| **Switch** | Lights, Easy Mode, Filter, Pumps 2–5, Blowers 1–2, SDS, YESS, Fogger | Optional hardware only shown if present |
+| **Binary Sensor** | Connected, Problem | Connected = online/offline; Problem = active error codes (diagnostic) |
+| **Sensor** | Water temp, setpoint, pH, chlorine (ORP), filter status/duration/frequency, error codes | pH & ORP require Spa Boy® |
+| **Switch** | Lights, Filter, Pumps 2–5, Blowers 1–2, SDS, YESS, Fogger | Optional hardware only shown if present |
 | **Select** | Pump 1 speed | off / low / high |
-| **Button** | Boost | Activates boost mode |
+| **Button** | Boost, Easy Mode | Boost = heavy chlorination; Easy Mode = all jets on |
 | **Number** | Filter frequency, Filter duration | Schedule configuration |
 
 Optional features (Spa Boy®, SDS, YESS, fogger, blowers, pump 4/5) are only exposed when present in your spa's status response.
@@ -122,7 +122,7 @@ segments:
 ### Commands don't take effect
 - The spa's internal state may prevent certain commands (e.g., temperature changes while in overtemperature state)
 - Check the **Filter Status** and **Errors** sensors for active conditions that may be blocking commands
-- The integration verifies state after each command — if the spa didn't honor it, the entity will reflect the actual state
+- The integration waits 1 second after each command before re-polling to allow the spa time to apply the change
 
 ### "Overtemperature" filter status
 - This is normal — when water temperature exceeds the setpoint, the spa suspends filtration until it cools
