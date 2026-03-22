@@ -1,4 +1,4 @@
-"""Button entity for Arctic Spa boost mode."""
+"""Button entities for Arctic Spas (stateless trigger actions)."""
 from __future__ import annotations
 
 import logging
@@ -23,7 +23,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: ArcticSpaCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([ArcticSpaBoostButton(coordinator, entry)])
+    async_add_entities([
+        ArcticSpaBoostButton(coordinator, entry),
+        ArcticSpaEasyModeButton(coordinator, entry),
+    ])
 
 
 class ArcticSpaBoostButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity):
@@ -42,5 +45,29 @@ class ArcticSpaBoostButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity
             await self.coordinator.client.activate_boost()
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to activate boost: %s", err)
+            return
+        await self.coordinator.async_request_refresh()
+
+
+class ArcticSpaEasyModeButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity):
+    """Button that activates easy mode on the spa.
+
+    Easy mode triggers pump activity but the API never returns an easymode
+    status field, so this is modelled as a stateless button rather than a switch.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Easy Mode"
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_easymode"
+        self._attr_device_info = device_info(entry)
+
+    async def async_press(self) -> None:
+        try:
+            await self.coordinator.client.set_easymode(True)
+        except ArcticSpaApiError as err:
+            _LOGGER.error("Failed to activate easy mode: %s", err)
             return
         await self.coordinator.async_request_refresh()

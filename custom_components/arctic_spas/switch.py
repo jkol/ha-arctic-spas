@@ -29,7 +29,6 @@ class ArcticSpaSwitchDescription(SwitchEntityDescription):
     turn_on: Callable[[ArcticSpaClient], Coroutine[Any, Any, Any]]
     turn_off: Callable[[ArcticSpaClient], Coroutine[Any, Any, Any]]
     optional: bool = False
-    default_when_absent: bool | None = None
     state_is_on: Callable[[Any], bool] | None = None
 
 
@@ -50,14 +49,7 @@ SWITCHES: tuple[ArcticSpaSwitchDescription, ...] = (
         turn_on=lambda c: c.set_lights(True),
         turn_off=lambda c: c.set_lights(False),
     ),
-    ArcticSpaSwitchDescription(
-        key="easymode",
-        name="Easy Mode",
-        status_key="easymode",
-        turn_on=lambda c: c.set_easymode(True),
-        turn_off=lambda c: c.set_easymode(False),
-        default_when_absent=False,
-    ),
+
     ArcticSpaSwitchDescription(
         key="filter",
         name="Filter",
@@ -180,7 +172,7 @@ class ArcticSpaSwitch(CoordinatorEntity[ArcticSpaCoordinator], SwitchEntity):
     def is_on(self) -> bool | None:
         value = self.coordinator.data.get(self.entity_description.status_key)
         if value is None:
-            return self.entity_description.default_when_absent
+            return None
         if self.entity_description.state_is_on is not None:
             return self.entity_description.state_is_on(value)
         return _is_on(value)
