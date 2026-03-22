@@ -54,7 +54,7 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
-                    title="Arctic Spa",
+                    title="Arctic Spas",
                     data={CONF_API_KEY: api_key},
                 )
 
@@ -62,4 +62,7 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
             errors=errors,
+            description_placeholders={
+                "api_key_url": "https://myarcticspa.com/spa/SpaAPIManagement.aspx"
+            },
         )

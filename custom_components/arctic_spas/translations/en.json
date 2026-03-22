@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to Arctic Spas",
-        "description": "Enter your My Arctic Spa API key. You can manage API keys at https://myarcticspa.com/spa/SpaAPIManagement.aspx",
+        "description": "Enter your My Arctic Spa API key. You can manage API keys at [{api_key_url}]({api_key_url})",
         "data": {
           "api_key": "API Key"
         }
