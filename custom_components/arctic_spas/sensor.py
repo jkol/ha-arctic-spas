@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ArcticSpaCoordinator
+from .entity_base import device_info
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -44,9 +45,11 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
     ),
     ArcticSpaSensorDescription(
         key="ph",
-        name="pH",
+        name="Spa pH Level",
+        device_class=SensorDeviceClass.PH,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="pH",
+        icon="mdi:ph",
         optional=True,
     ),
     ArcticSpaSensorDescription(
@@ -57,9 +60,11 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
     ),
     ArcticSpaSensorDescription(
         key="orp",
-        name="ORP",
+        name="Spa Chlorine Level",
+        device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="mV",
+        icon="mdi:lightning-bolt",
         optional=True,
     ),
     ArcticSpaSensorDescription(
@@ -74,14 +79,14 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENUM,
     ),
     ArcticSpaSensorDescription(
-        key="filter_duration",
+        key="filtration_duration",
         name="Filter Duration",
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.HOURS,
     ),
     ArcticSpaSensorDescription(
-        key="filter_frequency",
+        key="filtration_frequency",
         name="Filter Frequency",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="cycles/day",
@@ -93,6 +98,8 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
     ),
 )
 
+_OPTIONAL_SENSORS = {desc.key: desc for desc in SENSORS if desc.optional}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -102,12 +109,29 @@ async def async_setup_entry(
     coordinator: ArcticSpaCoordinator = hass.data[DOMAIN][entry.entry_id]
     data = coordinator.data or {}
 
-    entities = [
-        ArcticSpaSensor(coordinator, entry, desc)
-        for desc in SENSORS
-        if not desc.optional or desc.key in data
-    ]
-    async_add_entities(entities)
+    # Add non-optional sensors immediately, plus any optional ones already present.
+    added_keys: set[str] = set()
+    initial = []
+    for desc in SENSORS:
+        if not desc.optional or desc.key in data:
+            initial.append(ArcticSpaSensor(coordinator, entry, desc))
+            added_keys.add(desc.key)
+    async_add_entities(initial)
+
+    # Watch for optional features that appear in later polls.
+    def _check_for_new_optional_sensors() -> None:
+        current_data = coordinator.data or {}
+        new_entities = []
+        for key, desc in _OPTIONAL_SENSORS.items():
+            if key not in added_keys and key in current_data:
+                new_entities.append(ArcticSpaSensor(coordinator, entry, desc))
+                added_keys.add(key)
+        if new_entities:
+            async_add_entities(new_entities)
+
+    entry.async_on_unload(
+        coordinator.async_add_listener(_check_for_new_optional_sensors)
+    )
 
 
 class ArcticSpaSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
@@ -125,11 +149,7 @@ class ArcticSpaSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Arctic Spa",
-            "manufacturer": "Arctic Spas",
-        }
+        self._attr_device_info = device_info(entry)
 
     @property
     def native_value(self) -> Any:

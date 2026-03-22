@@ -1,6 +1,7 @@
 """Climate entity for Arctic Spa (temperature control)."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -14,8 +15,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .api import ArcticSpaApiError
 from .const import DOMAIN
 from .coordinator import ArcticSpaCoordinator
+from .entity_base import device_info
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -43,11 +48,7 @@ class ArcticSpaClimate(CoordinatorEntity[ArcticSpaCoordinator], ClimateEntity):
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_climate"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Arctic Spa",
-            "manufacturer": "Arctic Spas",
-        }
+        self._attr_device_info = device_info(entry)
 
     @property
     def current_temperature(self) -> float | None:
@@ -60,7 +61,11 @@ class ArcticSpaClimate(CoordinatorEntity[ArcticSpaCoordinator], ClimateEntity):
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = kwargs.get("temperature")
         if temp is not None:
-            await self.coordinator.client.set_temperature(int(temp))
+            try:
+                await self.coordinator.client.set_temperature(int(temp))
+            except ArcticSpaApiError as err:
+                _LOGGER.error("Failed to set temperature: %s", err)
+                return
             await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:

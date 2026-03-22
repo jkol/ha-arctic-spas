@@ -1,6 +1,7 @@
 """Number entities for Arctic Spa filter schedule configuration."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,9 +17,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import ArcticSpaClient
+from .api import ArcticSpaApiError
 from .const import DOMAIN
 from .coordinator import ArcticSpaCoordinator
+from .entity_base import device_info
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -28,7 +32,7 @@ class ArcticSpaNumberDescription(NumberEntityDescription):
 
 NUMBERS: tuple[ArcticSpaNumberDescription, ...] = (
     ArcticSpaNumberDescription(
-        key="filter_frequency",
+        key="filtration_frequency",
         name="Filter Frequency",
         filter_kwarg="frequency",
         native_min_value=1,
@@ -38,7 +42,7 @@ NUMBERS: tuple[ArcticSpaNumberDescription, ...] = (
         mode=NumberMode.BOX,
     ),
     ArcticSpaNumberDescription(
-        key="filter_duration",
+        key="filtration_duration",
         name="Filter Duration",
         filter_kwarg="duration",
         native_min_value=1,
@@ -77,11 +81,7 @@ class ArcticSpaNumber(CoordinatorEntity[ArcticSpaCoordinator], NumberEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Arctic Spa",
-            "manufacturer": "Arctic Spas",
-        }
+        self._attr_device_info = device_info(entry)
 
     @property
     def native_value(self) -> float | None:
@@ -89,7 +89,13 @@ class ArcticSpaNumber(CoordinatorEntity[ArcticSpaCoordinator], NumberEntity):
         return float(value) if value is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
-        await self.coordinator.client.set_filter(
-            **{self.entity_description.filter_kwarg: int(value)}
-        )
+        kwarg = self.entity_description.filter_kwarg
+        try:
+            if kwarg == "frequency":
+                await self.coordinator.client.set_filter(frequency=int(value))
+            else:
+                await self.coordinator.client.set_filter(duration=int(value))
+        except ArcticSpaApiError as err:
+            _LOGGER.error("Failed to set filter %s: %s", kwarg, err)
+            return
         await self.coordinator.async_request_refresh()

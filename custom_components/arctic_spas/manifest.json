@@ -1,0 +1,12 @@
+{
+  "domain": "arctic_spas",
+  "name": "Arctic Spas",
+  "codeowners": ["@jkol"],
+  "config_flow": true,
+  "documentation": "https://github.com/jkol/ha-arctic-spas",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/jkol/ha-arctic-spas/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

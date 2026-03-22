@@ -1,6 +1,6 @@
-"""Constants for the Arctic Spa integration."""
+"""Constants for the Arctic Spas integration."""
 
-DOMAIN = "arctic_spa"
+DOMAIN = "arctic_spas"
 API_BASE_URL = "https://api.myarcticspa.com"
 DEFAULT_POLL_INTERVAL = 30  # seconds
 

@@ -1,7 +1,6 @@
 """Arctic Spa API client."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -10,6 +9,8 @@ import aiohttp
 from .const import API_BASE_URL
 
 _LOGGER = logging.getLogger(__name__)
+
+_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
 
 
 class ArcticSpaApiError(Exception):
@@ -45,7 +46,7 @@ class ArcticSpaClient:
         url = f"{API_BASE_URL}{path}"
         try:
             async with self._session.request(
-                method, url, headers=self._headers, json=json
+                method, url, headers=self._headers, json=json, timeout=_TIMEOUT
             ) as resp:
                 if resp.status == 429:
                     raise ArcticSpaRateLimitError("Rate limit exceeded")
@@ -61,7 +62,10 @@ class ArcticSpaClient:
                     )
                 if resp.status == 204 or resp.content_length == 0:
                     return {}
-                return await resp.json()
+                try:
+                    return await resp.json()
+                except (ValueError, aiohttp.ContentTypeError) as err:
+                    raise ArcticSpaApiError(f"Invalid JSON in response: {err}") from err
         except aiohttp.ClientError as err:
             raise ArcticSpaApiError(f"Connection error: {err}") from err
 
@@ -93,9 +97,25 @@ class ArcticSpaClient:
             "PUT", f"/v2/spa/blowers/{blower}", json={"state": "on" if on else "off"}
         )
 
-    async def set_filter(self, **kwargs: Any) -> dict[str, Any]:
+    async def set_filter(
+        self,
+        state: str | None = None,
+        frequency: int | None = None,
+        duration: int | None = None,
+        suspension: bool | None = None,
+    ) -> dict[str, Any]:
         """PUT /v2/spa/filter — toggle filter and configure schedule."""
-        return await self._request("PUT", "/v2/spa/filter", json=kwargs)
+        body = {
+            k: v
+            for k, v in {
+                "state": state,
+                "frequency": frequency,
+                "duration": duration,
+                "suspension": suspension,
+            }.items()
+            if v is not None
+        }
+        return await self._request("PUT", "/v2/spa/filter", json=body)
 
     async def set_easymode(self, on: bool) -> dict[str, Any]:
         """PUT /v2/spa/easymode — toggle easy mode."""

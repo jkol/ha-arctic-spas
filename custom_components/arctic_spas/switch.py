@@ -1,8 +1,9 @@
 """Switch entities for Arctic Spa (on/off controls)."""
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
@@ -11,9 +12,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import ArcticSpaClient
+from .api import ArcticSpaApiError, ArcticSpaClient
 from .const import DOMAIN
 from .coordinator import ArcticSpaCoordinator
+from .entity_base import device_info
+
+_LOGGER = logging.getLogger(__name__)
+
+# filter_status values that mean the filter is actively running
+_FILTER_ON_STATES = {"filtering", "purge", "boost", "sanitize", "resuming"}
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -22,6 +29,8 @@ class ArcticSpaSwitchDescription(SwitchEntityDescription):
     turn_on: Callable[[ArcticSpaClient], Coroutine[Any, Any, Any]]
     turn_off: Callable[[ArcticSpaClient], Coroutine[Any, Any, Any]]
     optional: bool = False
+    default_when_absent: bool | None = None
+    state_is_on: Callable[[Any], bool] | None = None
 
 
 def _is_on(value: Any) -> bool:
@@ -47,6 +56,15 @@ SWITCHES: tuple[ArcticSpaSwitchDescription, ...] = (
         status_key="easymode",
         turn_on=lambda c: c.set_easymode(True),
         turn_off=lambda c: c.set_easymode(False),
+        default_when_absent=False,
+    ),
+    ArcticSpaSwitchDescription(
+        key="filter",
+        name="Filter",
+        status_key="filter_status",
+        turn_on=lambda c: c.set_filter(state="on"),
+        turn_off=lambda c: c.set_filter(state="off"),
+        state_is_on=lambda v: isinstance(v, str) and v.lower() in _FILTER_ON_STATES,
     ),
     ArcticSpaSwitchDescription(
         key="sds",
@@ -95,6 +113,7 @@ SWITCHES: tuple[ArcticSpaSwitchDescription, ...] = (
         status_key="pump2",
         turn_on=lambda c: c.set_pump("2", "high"),
         turn_off=lambda c: c.set_pump("2", "off"),
+        optional=True,
     ),
     ArcticSpaSwitchDescription(
         key="pump3",
@@ -102,6 +121,7 @@ SWITCHES: tuple[ArcticSpaSwitchDescription, ...] = (
         status_key="pump3",
         turn_on=lambda c: c.set_pump("3", "high"),
         turn_off=lambda c: c.set_pump("3", "off"),
+        optional=True,
     ),
     ArcticSpaSwitchDescription(
         key="pump4",
@@ -153,23 +173,29 @@ class ArcticSpaSwitch(CoordinatorEntity[ArcticSpaCoordinator], SwitchEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Arctic Spa",
-            "manufacturer": "Arctic Spas",
-        }
+        self._attr_device_info = device_info(entry)
 
     @property
     def is_on(self) -> bool | None:
         value = self.coordinator.data.get(self.entity_description.status_key)
         if value is None:
-            return None
+            return self.entity_description.default_when_absent
+        if self.entity_description.state_is_on is not None:
+            return self.entity_description.state_is_on(value)
         return _is_on(value)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.entity_description.turn_on(self.coordinator.client)
+        try:
+            await self.entity_description.turn_on(self.coordinator.client)
+        except ArcticSpaApiError as err:
+            _LOGGER.error("Failed to turn on %s: %s", self.entity_description.name, err)
+            return
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.entity_description.turn_off(self.coordinator.client)
+        try:
+            await self.entity_description.turn_off(self.coordinator.client)
+        except ArcticSpaApiError as err:
+            _LOGGER.error("Failed to turn off %s: %s", self.entity_description.name, err)
+            return
         await self.coordinator.async_request_refresh()

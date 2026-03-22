@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import ArcticSpaApiError, ArcticSpaClient, ArcticSpaTemporaryError
+from .api import ArcticSpaApiError, ArcticSpaClient, ArcticSpaRateLimitError, ArcticSpaTemporaryError
 from .const import DEFAULT_POLL_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +29,9 @@ class ArcticSpaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             return await self.client.get_status()
+        except ArcticSpaRateLimitError as err:
+            _LOGGER.warning("Arctic Spa API rate limit hit: %s", err)
+            raise UpdateFailed("Rate limit exceeded, will retry next cycle") from err
         except ArcticSpaTemporaryError as err:
             # 503 — log and surface as UpdateFailed; HA will retry next cycle
             _LOGGER.debug("Transient error from Arctic Spa API: %s", err)
