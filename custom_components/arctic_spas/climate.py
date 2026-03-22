@@ -1,6 +1,7 @@
 """Climate entity for Arctic Spa (temperature control)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -66,6 +67,7 @@ class ArcticSpaClimate(CoordinatorEntity[ArcticSpaCoordinator], ClimateEntity):
             except ArcticSpaApiError as err:
                 _LOGGER.error("Failed to set temperature: %s", err)
                 return
+            await asyncio.sleep(1)
             await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:

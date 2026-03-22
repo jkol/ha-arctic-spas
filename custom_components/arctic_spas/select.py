@@ -1,6 +1,7 @@
 """Select entity for Pump 1 (off/low/high)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components.select import SelectEntity
@@ -51,4 +52,5 @@ class ArcticSpaPump1Select(CoordinatorEntity[ArcticSpaCoordinator], SelectEntity
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to set pump 1 to %s: %s", option, err)
             return
+        await asyncio.sleep(1)
         await self.coordinator.async_request_refresh()

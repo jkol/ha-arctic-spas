@@ -1,6 +1,7 @@
 """Number entities for Arctic Spa filter schedule configuration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -98,4 +99,5 @@ class ArcticSpaNumber(CoordinatorEntity[ArcticSpaCoordinator], NumberEntity):
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to set filter %s: %s", kwarg, err)
             return
+        await asyncio.sleep(1)
         await self.coordinator.async_request_refresh()

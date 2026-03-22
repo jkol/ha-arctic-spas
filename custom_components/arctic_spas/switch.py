@@ -1,6 +1,7 @@
 """Switch entities for Arctic Spa (on/off controls)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
@@ -183,6 +184,7 @@ class ArcticSpaSwitch(CoordinatorEntity[ArcticSpaCoordinator], SwitchEntity):
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to turn on %s: %s", self.entity_description.name, err)
             return
+        await asyncio.sleep(1)
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -191,4 +193,5 @@ class ArcticSpaSwitch(CoordinatorEntity[ArcticSpaCoordinator], SwitchEntity):
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to turn off %s: %s", self.entity_description.name, err)
             return
+        await asyncio.sleep(1)
         await self.coordinator.async_request_refresh()

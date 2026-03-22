@@ -1,6 +1,7 @@
 """Button entities for Arctic Spas (stateless trigger actions)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components.button import ButtonEntity
@@ -47,6 +48,7 @@ class ArcticSpaBoostButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to activate boost: %s", err)
             return
+        await asyncio.sleep(1)
         await self.coordinator.async_request_refresh()
 
 
@@ -72,4 +74,5 @@ class ArcticSpaEasyModeButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEnt
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to activate easy mode: %s", err)
             return
+        await asyncio.sleep(1)
         await self.coordinator.async_request_refresh()
