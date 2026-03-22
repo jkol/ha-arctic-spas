@@ -13,6 +13,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -93,7 +94,8 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
     ),
     ArcticSpaSensorDescription(
         key="errors",
-        name="Errors",
+        name="Error Codes",
+        entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=True,
     ),
 )
@@ -153,4 +155,7 @@ class ArcticSpaSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
 
     @property
     def native_value(self) -> Any:
-        return self.coordinator.data.get(self.entity_description.key)
+        value = self.coordinator.data.get(self.entity_description.key)
+        if self.entity_description.key == "errors":
+            return ", ".join(value) if value else "none"
+        return value
