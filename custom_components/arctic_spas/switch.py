@@ -89,6 +89,7 @@ SWITCHES: tuple[ArcticSpaSwitchDescription, ...] = (
         turn_on=lambda c: c.set_fogger(True),
         turn_off=lambda c: c.set_fogger(False),
         optional=True,
+        icon="mdi:weather-fog",
     ),
     ArcticSpaSwitchDescription(
         key="blower1",
