@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from abc import ABC, abstractmethod
 from typing import Any
 
 import aiohttp
@@ -29,7 +31,54 @@ class ArcticSpaAuthError(ArcticSpaApiError):
     """Raised on HTTP 401/403."""
 
 
-class ArcticSpaClient:
+class ArcticSpaClientBase(ABC):
+    """Abstract base class for Arctic Spa clients (cloud and local)."""
+
+    @abstractmethod
+    async def get_status(self) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_temperature(self, setpoint_f: int) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_lights(self, on: bool) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_pump(self, pump: str, state: str) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_blower(self, blower: str, on: bool) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_filter(
+        self,
+        state: str | None = None,
+        frequency: int | None = None,
+        duration: int | None = None,
+        suspension: bool | None = None,
+    ) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_easymode(self, on: bool) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def activate_boost(self) -> dict[str, Any]: ...
+
+    async def activate_spaboy_boost(self) -> dict[str, Any]:
+        """Activate SpaBoy chlorine boost.  Only supported in local mode."""
+        raise ArcticSpaApiError("SpaBoy boost is not supported in this connection mode")
+
+    @abstractmethod
+    async def set_sds(self, on: bool) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_yess(self, on: bool) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def set_fogger(self, on: bool) -> dict[str, Any]: ...
+
+
+class ArcticSpaClient(ArcticSpaClientBase):
     """Async client for the Arctic Spa REST API."""
 
     def __init__(self, api_key: str, session: aiohttp.ClientSession) -> None:
@@ -71,7 +120,9 @@ class ArcticSpaClient:
 
     async def get_status(self) -> dict[str, Any]:
         """GET /v2/spa/status — full spa state."""
-        return await self._request("GET", "/v2/spa/status")
+        data = await self._request("GET", "/v2/spa/status")
+        data["data_timestamp"] = time.monotonic()
+        return data
 
     async def set_temperature(self, setpoint_f: int) -> dict[str, Any]:
         """PUT /v2/spa/temperature — set temperature setpoint."""

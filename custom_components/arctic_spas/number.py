@@ -1,7 +1,6 @@
 """Number entities for Arctic Spa filter schedule configuration."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -46,8 +45,8 @@ NUMBERS: tuple[ArcticSpaNumberDescription, ...] = (
         key="filtration_duration",
         name="Filter Duration",
         filter_kwarg="duration",
-        native_min_value=1,
-        native_max_value=24,
+        native_min_value=0,
+        native_max_value=2,
         native_step=1,
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class=NumberDeviceClass.DURATION,
@@ -62,6 +61,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: ArcticSpaCoordinator = hass.data[DOMAIN][entry.entry_id]
+    if not coordinator.capabilities.has_filter_schedule:
+        return
     async_add_entities(
         [ArcticSpaNumber(coordinator, entry, desc) for desc in NUMBERS]
     )
@@ -82,7 +83,7 @@ class ArcticSpaNumber(CoordinatorEntity[ArcticSpaCoordinator], NumberEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
 
     @property
     def native_value(self) -> float | None:
@@ -99,5 +100,4 @@ class ArcticSpaNumber(CoordinatorEntity[ArcticSpaCoordinator], NumberEntity):
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to set filter %s: %s", kwarg, err)
             return
-        await asyncio.sleep(1)
-        await self.coordinator.async_request_refresh()
+        self.hass.async_create_task(self.coordinator.async_request_refresh_delayed())

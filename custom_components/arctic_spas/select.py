@@ -1,7 +1,6 @@
 """Select entity for Pump 1 (off/low/high)."""
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from homeassistant.components.select import SelectEntity
@@ -37,7 +36,16 @@ class ArcticSpaPump1Select(CoordinatorEntity[ArcticSpaCoordinator], SelectEntity
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_pump1"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    @property
+    def available(self) -> bool:
+        # Spa locks pump1 to high during filter boost — disallow changes
+        return (
+            super().available
+            and self.coordinator.data.get("connected", False)
+            and self.coordinator.data.get("filter_status") != "boost"
+        )
 
     @property
     def current_option(self) -> str | None:
@@ -52,5 +60,4 @@ class ArcticSpaPump1Select(CoordinatorEntity[ArcticSpaCoordinator], SelectEntity
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to set pump 1 to %s: %s", option, err)
             return
-        await asyncio.sleep(1)
-        await self.coordinator.async_request_refresh()
+        self.hass.async_create_task(self.coordinator.async_request_refresh_delayed())

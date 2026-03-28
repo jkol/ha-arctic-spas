@@ -22,10 +22,19 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: ArcticSpaCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
+    caps = coordinator.capabilities
+
+    entities: list[BinarySensorEntity] = [
         ArcticSpaConnectedSensor(coordinator, entry),
-        ArcticSpaErrorSensor(coordinator, entry),
-    ])
+    ]
+    if caps.has_errors:
+        entities.append(ArcticSpaErrorSensor(coordinator, entry))
+    if caps.has_exhaust:
+        entities.append(ArcticSpaExhaustSensor(coordinator, entry))
+    if caps.has_economy:
+        entities.append(ArcticSpaEconomySensor(coordinator, entry))
+
+    async_add_entities(entities)
 
 
 class ArcticSpaConnectedSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
@@ -38,7 +47,7 @@ class ArcticSpaConnectedSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySe
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_connected"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
 
     @property
     def is_on(self) -> bool:
@@ -56,7 +65,7 @@ class ArcticSpaErrorSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensor
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_problem"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
 
     @property
     def is_on(self) -> bool:
@@ -67,3 +76,37 @@ class ArcticSpaErrorSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensor
     def extra_state_attributes(self) -> dict:
         errors = self.coordinator.data.get("errors", [])
         return {"error_codes": ", ".join(errors) if errors else "none"}
+
+
+class ArcticSpaExhaustSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
+    """On when the spa exhaust fan is running (cooling after heater overshoot)."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Exhaust Fan"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_exhaust"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    @property
+    def is_on(self) -> bool:
+        return bool((self.coordinator.data or {}).get("exhaust"))
+
+
+class ArcticSpaEconomySensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
+    """On when economy (energy-savings schedule) mode is active."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Economy Mode"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_economy"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    @property
+    def is_on(self) -> bool:
+        return bool((self.coordinator.data or {}).get("economy"))

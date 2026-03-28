@@ -1,18 +1,20 @@
 """Sensor entities for Arctic Spa (read-only status values)."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature, UnitOfTime
-from homeassistant.core import HomeAssistant
+from homeassistant.const import UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower, UnitOfTemperature, UnitOfTime
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -20,13 +22,15 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import ArcticSpaCoordinator
 from .entity_base import device_info
+from .spa_data import SpaCapabilities
 
 
 @dataclass(frozen=True, kw_only=True)
 class ArcticSpaSensorDescription(SensorEntityDescription):
-    """Extends SensorEntityDescription with optional-feature flag."""
+    """Extends SensorEntityDescription with a capabilities gate."""
 
-    optional: bool = False  # Only add if field present in status response
+    # None = always create; callable returns True when the entity should be created.
+    capabilities_check: Callable[[SpaCapabilities], bool] | None = None
 
 
 SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
@@ -49,15 +53,15 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         name="Spa pH Level",
         device_class=SensorDeviceClass.PH,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="pH",
+        native_unit_of_measurement=None,
         icon="mdi:ph",
-        optional=True,
+        capabilities_check=lambda caps: caps.spaboy,
     ),
     ArcticSpaSensorDescription(
         key="ph_status",
         name="pH Status",
         device_class=SensorDeviceClass.ENUM,
-        optional=True,
+        capabilities_check=lambda caps: caps.spaboy,
     ),
     ArcticSpaSensorDescription(
         key="orp",
@@ -66,13 +70,13 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="mV",
         icon="mdi:lightning-bolt",
-        optional=True,
+        capabilities_check=lambda caps: caps.spaboy,
     ),
     ArcticSpaSensorDescription(
         key="orp_status",
         name="ORP Status",
         device_class=SensorDeviceClass.ENUM,
-        optional=True,
+        capabilities_check=lambda caps: caps.spaboy,
     ),
     ArcticSpaSensorDescription(
         key="filter_status",
@@ -85,22 +89,63 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTime.HOURS,
+        capabilities_check=lambda caps: caps.has_filter_data,
     ),
     ArcticSpaSensorDescription(
         key="filtration_frequency",
         name="Filter Frequency",
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="cycles/day",
+        capabilities_check=lambda caps: caps.has_filter_data,
     ),
     ArcticSpaSensorDescription(
         key="errors",
         name="Error Codes",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=True,
+        capabilities_check=lambda caps: caps.has_errors,
+    ),
+    ArcticSpaSensorDescription(
+        key="power_w",
+        name="Power",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+        icon="mdi:lightning-bolt",
+        capabilities_check=lambda caps: caps.has_power_sensor,
+    ),
+    ArcticSpaSensorDescription(
+        key="current_adc",
+        name="Current Draw (raw ADC)",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:lightning-bolt",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        capabilities_check=lambda caps: caps.has_power_sensor,
+    ),
+    ArcticSpaSensorDescription(
+        key="heater_outlet_temp_f",
+        name="Heater Outlet Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        capabilities_check=lambda caps: caps.has_heater_outlet_temp,
+    ),
+    ArcticSpaSensorDescription(
+        key="heater1_state",
+        name="Heater 1 State",
+        device_class=SensorDeviceClass.ENUM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        capabilities_check=lambda caps: caps.has_heater_states,
+    ),
+    ArcticSpaSensorDescription(
+        key="heater2_state",
+        name="Heater 2 State",
+        device_class=SensorDeviceClass.ENUM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        capabilities_check=lambda caps: caps.has_heater_states,
     ),
 )
-
-_OPTIONAL_SENSORS = {desc.key: desc for desc in SENSORS if desc.optional}
 
 
 async def async_setup_entry(
@@ -109,31 +154,20 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: ArcticSpaCoordinator = hass.data[DOMAIN][entry.entry_id]
-    data = coordinator.data or {}
+    caps = coordinator.capabilities
 
-    # Add non-optional sensors immediately, plus any optional ones already present.
-    added_keys: set[str] = set()
-    initial = []
-    for desc in SENSORS:
-        if not desc.optional or desc.key in data:
-            initial.append(ArcticSpaSensor(coordinator, entry, desc))
-            added_keys.add(desc.key)
-    async_add_entities(initial)
-
-    # Watch for optional features that appear in later polls.
-    def _check_for_new_optional_sensors() -> None:
-        current_data = coordinator.data or {}
-        new_entities = []
-        for key, desc in _OPTIONAL_SENSORS.items():
-            if key not in added_keys and key in current_data:
-                new_entities.append(ArcticSpaSensor(coordinator, entry, desc))
-                added_keys.add(key)
-        if new_entities:
-            async_add_entities(new_entities)
-
-    entry.async_on_unload(
-        coordinator.async_add_listener(_check_for_new_optional_sensors)
-    )
+    entities: list[SensorEntity] = [
+        ArcticSpaSensor(coordinator, entry, desc)
+        for desc in SENSORS
+        if desc.capabilities_check is None or desc.capabilities_check(caps)
+    ]
+    if caps.has_power_sensor:
+        entities.append(ArcticSpaEnergySensor(coordinator, entry))
+    if caps.has_filter_details:
+        filters = (coordinator.data or {}).get("filters", [])
+        for f in filters:
+            entities.append(ArcticSpaFilterSensor(coordinator, entry, f["slot"]))
+    async_add_entities(entities)
 
 
 class ArcticSpaSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
@@ -151,7 +185,7 @@ class ArcticSpaSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
 
     @property
     def native_value(self) -> Any:
@@ -159,3 +193,106 @@ class ArcticSpaSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
         if self.entity_description.key == "errors":
             return ", ".join(value) if value else "none"
         return value
+
+
+class ArcticSpaEnergySensor(CoordinatorEntity[ArcticSpaCoordinator], RestoreSensor):
+    """Cumulative energy consumption in kWh, derived from the power reading.
+
+    Integrates power_w over time using a left-Riemann sum: each coordinator
+    update adds (power_w / 1000) × elapsed_hours to the running total.
+    The accumulated value survives HA restarts via RestoreSensor.
+
+    Works for MQTT mode (push updates on each telemetry topic) and Local mode
+    (~640 ms spa_live cycle).  Gated on caps.has_power_sensor.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Energy"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 3
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_energy_kwh"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+        self._accumulated_kwh: float = 0.0
+        self._last_update: float | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last_data := await self.async_get_last_sensor_data()) is not None:
+            try:
+                self._accumulated_kwh = float(last_data.native_value)
+            except (ValueError, TypeError):
+                pass
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        data_ts: float | None = self.coordinator.data.get("data_timestamp")
+        if data_ts is None or data_ts == self._last_update:
+            # No new primary status reading; skip integration.
+            self.async_write_ha_state()
+            return
+        if self._last_update is not None:
+            power_w = self.coordinator.data.get("power_w")
+            if isinstance(power_w, (int, float)) and power_w >= 0:
+                elapsed_hours = (data_ts - self._last_update) / 3600.0
+                self._accumulated_kwh += (power_w / 1000.0) * elapsed_hours
+        self._last_update = data_ts
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> float:
+        return round(self._accumulated_kwh, 3)
+
+
+class ArcticSpaFilterSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
+    """A sensor representing a single physical filter cartridge.
+
+    State: condition string ("Good" / "Missing").
+    Extra attributes: serial number, install date (ISO string), days installed.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:air-filter"
+
+    def __init__(
+        self,
+        coordinator: ArcticSpaCoordinator,
+        entry: ConfigEntry,
+        slot: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self._slot = slot
+        self._attr_name = f"Filter {slot}"
+        self._attr_unique_id = f"{entry.entry_id}_filter_{slot}"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    def _filter_data(self) -> dict[str, Any] | None:
+        filters = (self.coordinator.data or {}).get("filters", [])
+        for f in filters:
+            if f.get("slot") == self._slot:
+                return f
+        return None
+
+    @property
+    def native_value(self) -> str | None:
+        f = self._filter_data()
+        if f is None:
+            return None
+        return f.get("condition")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        f = self._filter_data()
+        if f is None:
+            return {"serial": None, "install_date": None, "days_installed": None}
+        install_date = f.get("install_date")
+        return {
+            "serial": f.get("serial"),
+            "install_date": install_date.isoformat() if install_date else None,
+            "days_installed": f.get("days_installed"),
+        }

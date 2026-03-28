@@ -26,6 +26,35 @@ Optional features (Spa Boy®, SDS, YESS, fogger, blowers, pump 4/5) are only exp
 - [HACS](https://hacs.xyz/) installed
 - A My Arctic Spa API key — generate one at [myarcticspa.com/spa/SpaAPIManagement.aspx](https://myarcticspa.com/spa/SpaAPIManagement.aspx)
 
+## Connection Modes
+
+The integration supports three ways to connect to your spa:
+
+| Feature | REST (Cloud) | MQTT (Cloud) | Local |
+|---|---|---|---|
+| Internet required | Yes | Yes | No |
+| Update frequency | Every 30s (poll) | Real-time push (~2-3 min) | Real-time push (~640ms) |
+| Power monitoring | No | Yes | Yes |
+| Heater state sensors | No | Yes | Yes |
+| Economy / exhaust sensors | No | Yes | Yes |
+| Controls (lights, pumps, etc.) | Yes | Yes (MQTT-native) | Yes |
+| SpaBoy pH/ORP | Yes | Yes | Yes |
+| Filter schedule config | Yes | No | No |
+
+### REST (recommended for most users)
+
+Uses the My Arctic Spa cloud API with polling every 30 seconds. Requires only an API key. Best for users who don't need real-time updates or power monitoring.
+
+### MQTT
+
+Subscribes to cloud MQTT push updates using your My Arctic Spa app username and password. Provides real-time data, power monitoring (via the spa's built-in CT clamp), SpaBoy pH/ORP, and full control — all without an API key.
+
+Your password is hashed with SHA-1 before being used — the plaintext password is stored in HA's encrypted config storage at rest.
+
+### Local (no internet)
+
+Connects directly to the spa on your local network via port 12121 (the LPC firmware interface). Provides ~640ms update latency, power monitoring, and full control with no cloud dependency. Requires knowing the spa's local IP address.
+
 ## Installation
 
 ### Via HACS (recommended)
@@ -43,9 +72,14 @@ Copy `custom_components/arctic_spas/` into your HA `config/custom_components/` d
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **Arctic Spas**
-3. Enter your My Arctic Spa API key
+3. Choose your connection mode (REST, MQTT, or Local) and follow the prompts for that mode
 
-The integration will create a single device with all supported entities based on your spa's capabilities.
+The integration uses a multi-step setup flow:
+- **REST**: enter your My Arctic Spa API key
+- **MQTT**: enter your My Arctic Spa app username and password
+- **Local**: enter your spa's local IP address (and optionally port — default is 12121)
+
+The integration will create a single device with all supported entities based on your spa's capabilities and connection mode.
 
 ## Dashboard
 
@@ -95,28 +129,58 @@ segments:
     color: "#db4437"
 ```
 
-## My Arctic Spa API Notes
+## Technical Notes
 
+### REST mode
 - Status is polled every **30 seconds**
 - A `202` response to a control command means the requested state already matches — this is normal, not an error
 - `503` responses are transient; the integration retries on the next poll cycle
-- The spa may not immediately honor all commands; the integration requests a status refresh after each command
 - Rate limiting: if the API returns `429`, the integration backs off and retries on the next cycle
+
+### MQTT mode
+- The integration subscribes to three topics: `telemetry/spa`, `telemetry/filters`, `telemetry/errors`
+- Updates arrive passively from the broker (~every 2-3 minutes in typical use)
+- After issuing a command, the integration requests a data refresh after 1.5s to pick up the new state
+- JWT tokens are refreshed automatically before expiry — no manual re-authentication needed
+
+### Local mode
+- The spa broadcasts status every ~640ms; the integration processes each frame
+- A keepalive frame is sent every 650ms to maintain the persistent TCP session
+- The spa only allows one local client at a time — connecting displaces any existing client
+- Power consumption is calculated as `current_adc × 1.87 W` (confirmed via external watt meter)
 
 ## Troubleshooting
 
-### Integration fails to set up / "Cannot connect"
+### REST mode: "Cannot connect" or "Invalid API key"
 - Verify your API key is correct in the [My Arctic Spa portal](https://myarcticspa.com/spa/SpaAPIManagement.aspx)
-- Ensure your Home Assistant instance has outbound internet access to `api.myarcticspa.com` (the My Arctic Spa API)
+- Ensure your Home Assistant instance has outbound internet access to `api.myarcticspa.com`
 - Check HA logs (**Settings → System → Logs**) for specific error messages
+
+### MQTT mode: "Invalid credentials"
+- Double-check your My Arctic Spa app username and password
+- These are the same credentials you use to log in to the My Arctic Spa mobile app
+- If you recently changed your password, update the integration via **Settings → Devices & Services → Arctic Spas → Configure**
+
+### MQTT mode: controls don't work (read-only)
+- Controls require an API key in MQTT mode. Without one, the integration is read-only.
+- Add an API key via the integration options (Re-configure) to enable control.
+
+### Local mode: "Cannot connect"
+- Confirm the spa's IP address on your router's DHCP client list
+- Ensure port 12121 is reachable from your HA host (no firewall blocking it)
+- The spa only allows one local client at a time — if another app (e.g. the legacy DirectConnect app) is connected, disconnect it first
+- Note: some firmware versions may not support local mode
 
 ### Entities show as "Unavailable"
 - The spa may be offline or unreachable — check the **Connected** binary sensor
-- The API may be temporarily unavailable (503); the integration will recover automatically on the next poll cycle
+- For REST/MQTT: the API may be temporarily unavailable (503); the integration will recover automatically
+- For Local: the spa's persistent TCP session may have dropped; the integration will reconnect automatically
 
-### Optional entities (pH, ORP, blowers, etc.) not appearing
-- These entities are only created when your spa reports those features in its status response
+### Optional entities (pH, ORP, blowers, power, etc.) not appearing
+- These entities are only created when the spa reports those features
 - Spa Boy® is required for pH and ORP sensors
+- Power monitoring (`power_w`, `current_adc`) only appears in MQTT and Local modes
+- Heater state, economy, and exhaust sensors only appear in MQTT and Local modes
 - Check that the hardware is physically connected and enabled in your spa's settings
 
 ### Commands don't take effect

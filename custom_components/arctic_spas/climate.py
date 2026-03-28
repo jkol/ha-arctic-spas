@@ -1,7 +1,6 @@
 """Climate entity for Arctic Spa (temperature control)."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -49,7 +48,7 @@ class ArcticSpaClimate(CoordinatorEntity[ArcticSpaCoordinator], ClimateEntity):
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_climate"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
 
     @property
     def current_temperature(self) -> float | None:
@@ -67,8 +66,7 @@ class ArcticSpaClimate(CoordinatorEntity[ArcticSpaCoordinator], ClimateEntity):
             except ArcticSpaApiError as err:
                 _LOGGER.error("Failed to set temperature: %s", err)
                 return
-            await asyncio.sleep(1)
-            await self.coordinator.async_request_refresh()
+            self.hass.async_create_task(self.coordinator.async_request_refresh_delayed())
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         # Spa is always in heat mode; no-op for any other mode.

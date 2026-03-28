@@ -2,16 +2,44 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to Arctic Spas",
-        "description": "Enter your My Arctic Spa API key. You can manage API keys at [{api_key_url}]({api_key_url})",
+        "title": "Choose connection mode",
+        "description": "Choose how to connect to your Arctic Spas hot tub.",
+        "data": {
+          "mode": "Connection mode"
+        },
+        "data_description": {
+          "mode": "REST requires only an API key (recommended). MQTT provides real-time updates and power monitoring but requires your My Arctic Spa username and password. Local requires your spa's IP address and needs no internet connection."
+        }
+      },
+      "rest": {
+        "title": "REST API (Cloud)",
+        "description": "Enter your My Arctic Spa API key. Generate one at [{api_key_url}]({api_key_url})",
         "data": {
           "api_key": "API Key"
+        }
+      },
+      "mqtt": {
+        "title": "Cloud MQTT",
+        "description": "Enter your My Arctic Spa app credentials. Your password is hashed before storage — plaintext is never saved.",
+        "data": {
+          "mqtt_username": "Username",
+          "mqtt_password": "Password"
+        }
+      },
+      "local": {
+        "title": "Local Direct (no internet)",
+        "description": "Enter your spa's local IP address. Port 12121 is the standard LPC port.",
+        "data": {
+          "local_host": "Spa IP Address",
+          "local_port": "Port"
         }
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to the My Arctic Spa API. Check your network and try again.",
-      "invalid_auth": "Invalid API key. Please check your key and try again."
+      "cannot_connect": "Cannot connect to spa. Check your network and try again.",
+      "invalid_auth": "Invalid credentials. Please check and try again.",
+      "port_not_open": "Cannot reach the spa on the specified port. Ensure the spa is reachable on your local network.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "abort": {
       "already_configured": "This Arctic Spas hot tub is already configured."

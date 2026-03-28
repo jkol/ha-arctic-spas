@@ -11,7 +11,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.venv/
+.venv*
 venv/
 
 # Editor
@@ -31,3 +31,6 @@ home-assistant_v2.db
 .claude/
 
 CLAUDE.md
+
+# Local development files (not for distribution)
+local/

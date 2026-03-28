@@ -1,7 +1,6 @@
 """Button entities for Arctic Spas (stateless trigger actions)."""
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from homeassistant.components.button import ButtonEntity
@@ -24,32 +23,60 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: ArcticSpaCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        ArcticSpaBoostButton(coordinator, entry),
+    caps = coordinator.capabilities
+    entities: list[ButtonEntity] = [
+        ArcticSpaFiltrationBoostButton(coordinator, entry),
         ArcticSpaEasyModeButton(coordinator, entry),
-    ])
+    ]
+    if caps.has_spaboy_boost:
+        entities.append(ArcticSpaSpaBoyBoostButton(coordinator, entry))
+    async_add_entities(entities)
 
 
-class ArcticSpaBoostButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity):
-    """Button that activates boost mode on the spa."""
+class ArcticSpaFiltrationBoostButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity):
+    """Button that activates filtration boost mode on the spa."""
 
     _attr_has_entity_name = True
-    _attr_name = "Boost"
+    _attr_name = "Filtration Boost"
     _attr_icon = "mdi:rocket-launch"
 
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_boost"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
 
     async def async_press(self) -> None:
         try:
             await self.coordinator.client.activate_boost()
         except ArcticSpaApiError as err:
-            _LOGGER.error("Failed to activate boost: %s", err)
+            _LOGGER.error("Failed to activate filtration boost: %s", err)
             return
-        await asyncio.sleep(1)
-        await self.coordinator.async_request_refresh()
+        self.hass.async_create_task(self.coordinator.async_request_refresh_delayed())
+
+
+class ArcticSpaSpaBoyBoostButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity):
+    """Button that activates SpaBoy chlorine boost on the spa.
+
+    Only created when caps.has_spaboy_boost is True (local mode + SpaBoy hardware).
+    Uses coldfire SpaCommand field 19 (SPABOY_BOOST), packet type 0x0001.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "SpaBoy Boost"
+    _attr_icon = "mdi:flask"
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_spaboy_boost"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    async def async_press(self) -> None:
+        try:
+            await self.coordinator.client.activate_spaboy_boost()
+        except ArcticSpaApiError as err:
+            _LOGGER.error("Failed to activate SpaBoy boost: %s", err)
+            return
+        self.hass.async_create_task(self.coordinator.async_request_refresh_delayed())
 
 
 class ArcticSpaEasyModeButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEntity):
@@ -66,7 +93,7 @@ class ArcticSpaEasyModeButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEnt
     def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_easymode"
-        self._attr_device_info = device_info(entry)
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
 
     async def async_press(self) -> None:
         try:
@@ -74,5 +101,4 @@ class ArcticSpaEasyModeButton(CoordinatorEntity[ArcticSpaCoordinator], ButtonEnt
         except ArcticSpaApiError as err:
             _LOGGER.error("Failed to activate easy mode: %s", err)
             return
-        await asyncio.sleep(1)
-        await self.coordinator.async_request_refresh()
+        self.hass.async_create_task(self.coordinator.async_request_refresh_delayed())
