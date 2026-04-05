@@ -315,17 +315,42 @@ _SPABOY_COLOR_MAP: dict[int, str] = {
 }
 
 
+def _electrode_wear_to_status(wear: int) -> str | None:
+    """Map electrode wear percentage to a status string.
+
+    Thresholds from SpaBoyController.smali electrodeWearUpdated():
+      -1 = no data sentinel; any other out-of-range value → None (unavailable).
+    """
+    if wear < 0 or wear > 100:
+        return None
+    if wear > 80:
+        return "good"
+    if wear > 60:
+        return "ok"
+    if wear > 40:
+        return "fair"
+    if wear > 20:
+        return "low"
+    return "critical"
+
+
 def normalise_mqtt_spaboy(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
     """Merge /telemetry/spaboy payload into an existing canonical dict.
 
     SpaBoy is an optional water-chemistry module. Only present when installed.
     Fields (all from SpaboyLive / OnzenLive protobuf):
-      ph            Integer × 100  → canonical 'ph'             (float, 2 d.p.)
-      orp           Integer mV     → canonical 'orp'             (int)
-      phColor       SpaboyColor    → canonical 'ph_status'       (str)
-      orpColor      SpaboyColor    → canonical 'orp_status'      (str)
-      electrodeWear Integer 0-100  → canonical 'electrode_wear'  (int %)
-      sanitizing    bool           → canonical 'onzen_sanitizing' (bool)
+      ph              Integer × 100  → canonical 'ph'                        (float, 2 d.p.)
+      orp             Integer mV     → canonical 'orp'                        (int)
+      phColor         SpaboyColor    → canonical 'ph_status'                  (str)
+      orpColor        SpaboyColor    → canonical 'orp_status'                 (str)
+      eWear           Integer 0-100  → canonical 'electrode_wear'             (int %)
+      pump1           bool           → canonical 'onzen_pump'                 (bool)
+      current         Integer        → canonical 'electrode_current'          (int, raw units)
+      voltage         Integer        → canonical 'electrode_voltage'          (int, raw units)
+      currentSetpoint Integer µA     → canonical 'electrode_current_setpoint' (int)
+      eState          Integer        → canonical 'electrode_state'            (int)
+      emAh            Integer mAh    → canonical 'electrode_mah'              (int)
+      sanitizing      bool           → canonical 'onzen_sanitizing'           (bool)
         (field name 'sanitizing' confirmed from SpaBoyController.isSanitizing —
          may also appear as 'isSanitizing'; both are checked)
 
@@ -339,10 +364,28 @@ def normalise_mqtt_spaboy(payload: dict[str, Any], existing: dict[str, Any]) -> 
         existing["ph_status"] = _SPABOY_COLOR_MAP.get(payload["phColor"], "ok")
     if payload.get("orpColor") is not None:
         existing["orp_status"] = _SPABOY_COLOR_MAP.get(payload["orpColor"], "ok")
-    # Electrode wear — protobuf ELECTRODE_WEAR_FIELD_NUMBER = 0x16; JSON key: electrodeWear
-    ew = payload.get("electrodeWear")
+    # Electrode wear — MQTT telemetry/spaboy JSON key: eWear
+    # -1 is the firmware "no data" sentinel; skip it so the sensor shows unavailable.
+    ew = payload.get("eWear")
     if ew is not None:
-        existing["electrode_wear"] = int(ew)
+        wear = int(ew)
+        if wear >= 0:
+            existing["electrode_wear"] = wear
+            status = _electrode_wear_to_status(wear)
+            if status is not None:
+                existing["electrode_wear_status"] = status
+    if payload.get("pump1") is not None:
+        existing["onzen_pump"] = bool(payload["pump1"])
+    if payload.get("current") is not None:
+        existing["electrode_current"] = int(payload["current"])
+    if payload.get("voltage") is not None:
+        existing["electrode_voltage"] = int(payload["voltage"])
+    if payload.get("currentSetpoint") is not None:
+        existing["electrode_current_setpoint"] = int(payload["currentSetpoint"])
+    if payload.get("eState") is not None:
+        existing["electrode_state"] = int(payload["eState"])
+    if payload.get("emAh") is not None:
+        existing["electrode_mah"] = int(payload["emAh"])
     # Sanitizing / onzen status — SpaBoyController.isSanitizing; try both common key forms
     san = payload.get("sanitizing") if payload.get("sanitizing") is not None else payload.get("isSanitizing")
     if san is not None:
@@ -353,24 +396,92 @@ def normalise_mqtt_spaboy(payload: dict[str, Any], existing: dict[str, Any]) -> 
 def normalise_mqtt_settings_spaboy(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
     """Merge /settings/spaboy payload into an existing canonical dict.
 
-    Carries the current SpaBoy ORP and pH target ranges published by the mothership.
-    Field names are camelCase Gson serialisation of SpaboySettings / OnzenSettings protobuf:
-      orpHigh  → canonical 'spaboy_orp_high'  (int mV)
-      orpLow   → canonical 'spaboy_orp_low'   (int mV)
-      phHigh   → canonical 'spaboy_ph_high'   (int, × 100)
-      phLow    → canonical 'spaboy_ph_low'    (int, × 100)
+    The broker sends ORP and pH targets as RangeValue objects, e.g.:
+      "orp": {"min": 645, "max": 655, "current": null}
+      "ph":  {"min": 720, "max": 760, "current": null}
+
+    Extracts:
+      orp.min  → canonical 'spaboy_orp_low'   (int mV)
+      orp.max  → canonical 'spaboy_orp_high'  (int mV)
+      ph.min   → canonical 'spaboy_ph_low'    (int, × 100)
+      ph.max   → canonical 'spaboy_ph_high'   (int, × 100)
 
     Returns the updated dict (modifies existing in-place and also returns it).
     """
-    for src, dst in (
-        ("orpHigh", "spaboy_orp_high"),
-        ("orpLow",  "spaboy_orp_low"),
-        ("phHigh",  "spaboy_ph_high"),
-        ("phLow",   "spaboy_ph_low"),
-    ):
-        val = payload.get(src)
-        if val is not None:
-            existing[dst] = int(val)
+    orp = payload.get("orp")
+    if isinstance(orp, dict):
+        if orp.get("min") is not None:
+            existing["spaboy_orp_low"] = int(orp["min"])
+        if orp.get("max") is not None:
+            existing["spaboy_orp_high"] = int(orp["max"])
+    ph = payload.get("ph")
+    if isinstance(ph, dict):
+        if ph.get("min") is not None:
+            existing["spaboy_ph_low"] = int(ph["min"])
+        if ph.get("max") is not None:
+            existing["spaboy_ph_high"] = int(ph["max"])
+    return existing
+
+
+def normalise_mqtt_network_info(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    """Merge /information/network payload into an existing canonical dict.
+
+    Confirmed field names from live payload (2026-03-30):
+      ssid                → canonical 'wifi_ssid'        (str)
+      internal_ip_address → canonical 'wifi_ip_address'  (str)
+      signal_strength     → canonical 'wifi_rssi_dbm'    (int dBm, negative)
+      mac                 → canonical 'wifi_mac_address'  (str)
+
+    Returns the updated dict (modifies existing in-place and also returns it).
+    """
+    if payload.get("ssid") is not None:
+        existing["wifi_ssid"] = str(payload["ssid"])
+    if payload.get("internal_ip_address") is not None:
+        existing["wifi_ip_address"] = str(payload["internal_ip_address"])
+    if payload.get("signal_strength") is not None:
+        existing["wifi_rssi_dbm"] = int(payload["signal_strength"])
+    if payload.get("mac") is not None:
+        existing["wifi_mac_address"] = str(payload["mac"])
+    return existing
+
+
+def normalise_mqtt_rfid(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    """Merge /telemetry/rfid payload into an existing canonical dict.
+
+    Confirmed field names from live payload (2026-03-30):
+      isCommunicating  → canonical 'rfid_communicating' (bool)
+
+    The RFID payload reflects hardware liveness only — tag events are not
+    included in this topic. isCommunicating=1 means the reader is present and
+    communicating with the controller.
+
+    Returns the updated dict (modifies existing in-place and also returns it).
+    """
+    existing["rfid_communicating"] = bool(payload.get("isCommunicating", 0))
+    return existing
+
+
+def normalise_mqtt_settings_peak(payload: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    """Merge /settings/peak payload into an existing canonical dict.
+
+    Confirmed field names from live payload (2026-03-30):
+      sat/sun/mon/tue/wed/thu/fri  → canonical 'peak_mode_enabled' (bool)
+      peak / mid / off             → stored in 'peak_schedule' for attributes
+
+    peak_mode_enabled is True when at least one day-of-week flag is True.
+    When all days are False the schedule is defined but not active.
+
+    Returns the updated dict (modifies existing in-place and also returns it).
+    """
+    _DAYS = ("sat", "sun", "mon", "tue", "wed", "thu", "fri")
+    existing["peak_mode_enabled"] = any(payload.get(d, False) for d in _DAYS)
+    existing["peak_schedule"] = {
+        "peak": payload.get("peak"),
+        "mid": payload.get("mid"),
+        "off": payload.get("off"),
+        "offset": payload.get("offset"),
+        **{d: bool(payload.get(d, False)) for d in _DAYS},
+    }
     return existing
 
 
@@ -499,6 +610,12 @@ class SpaCapabilities:
     has_spaboy_boost: bool = False
     # Error reporting: REST + MQTT; Local protocol has no error codes
     has_errors: bool = True
+    # Network info sensors (MQTT only, from information/network)
+    has_network_info: bool = False
+    # RFID reader liveness sensor (MQTT only, from telemetry/rfid)
+    has_rfid: bool = False
+    # Peak-pricing schedule sensor (MQTT only, from settings/peak)
+    has_peak_settings: bool = False
     # Device identification enrichment (MQTT only, from information/spa)
     model: str | None = None
     firmware_lpc: str | None = None
@@ -593,7 +710,11 @@ def resolve_mqtt_capabilities(
         has_filter_schedule=True,  # spaSettings wrapper supports filtrationFrequency/Duration
         has_filter_details=True,   # per-filter serial/install date from telemetry/filters
         has_filter_suspension=True,  # spaSettings wrapper supports filterSuspension
+        has_spaboy_boost=bool(config.get("spaboy", 0)),  # SpaBoy boost via spaboySettings in MQTT
         has_errors=True,
+        has_network_info=True,   # information/network always fires on MQTT connect
+        has_rfid=True,           # telemetry/rfid always fires on MQTT connect
+        has_peak_settings=True,  # settings/peak always fires on MQTT connect
         model=info.get("model"),
         firmware_lpc=info.get("firmware_lpc"),
         firmware_yocto=info.get("firmware_yocto"),

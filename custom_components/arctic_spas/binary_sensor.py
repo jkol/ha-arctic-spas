@@ -33,6 +33,13 @@ async def async_setup_entry(
         entities.append(ArcticSpaExhaustSensor(coordinator, entry))
     if caps.has_economy:
         entities.append(ArcticSpaEconomySensor(coordinator, entry))
+    if caps.spaboy:
+        entities.append(ArcticSpaOnzenSanitizingSensor(coordinator, entry))
+        entities.append(ArcticSpaOnzenPumpSensor(coordinator, entry))
+    if caps.has_rfid:
+        entities.append(ArcticSpaRfidSensor(coordinator, entry))
+    if caps.has_peak_settings:
+        entities.append(ArcticSpaPeakModeSensor(coordinator, entry))
 
     async_add_entities(entities)
 
@@ -110,3 +117,79 @@ class ArcticSpaEconomySensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySens
     @property
     def is_on(self) -> bool:
         return bool((self.coordinator.data or {}).get("economy"))
+
+
+class ArcticSpaOnzenSanitizingSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
+    """On when the SpaBoy Onzen sanitizing cycle is actively running."""
+
+    _attr_has_entity_name = True
+    _attr_name = "SpaBoy Sanitizing"
+    _attr_icon = "mdi:flask"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_onzen_sanitizing"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    @property
+    def is_on(self) -> bool:
+        return bool((self.coordinator.data or {}).get("onzen_sanitizing"))
+
+
+class ArcticSpaOnzenPumpSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
+    """On when the SpaBoy circulation pump is actively running."""
+
+    _attr_has_entity_name = True
+    _attr_name = "SpaBoy Pump"
+    _attr_icon = "mdi:pump"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_onzen_pump"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    @property
+    def is_on(self) -> bool:
+        return bool((self.coordinator.data or {}).get("onzen_pump"))
+
+
+class ArcticSpaRfidSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
+    """On when the RFID reader is present and communicating with the controller."""
+
+    _attr_has_entity_name = True
+    _attr_name = "RFID Reader"
+    _attr_icon = "mdi:card-account-details"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_rfid_communicating"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    @property
+    def is_on(self) -> bool:
+        return bool((self.coordinator.data or {}).get("rfid_communicating"))
+
+
+class ArcticSpaPeakModeSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
+    """On when the peak-pricing schedule has at least one active day."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Peak Mode"
+    _attr_icon = "mdi:clock-time-eight"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: ArcticSpaCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_peak_mode_enabled"
+        self._attr_device_info = device_info(entry, coordinator.capabilities)
+
+    @property
+    def is_on(self) -> bool:
+        return bool((self.coordinator.data or {}).get("peak_mode_enabled"))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return (self.coordinator.data or {}).get("peak_schedule") or {}

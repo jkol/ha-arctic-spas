@@ -1,6 +1,7 @@
 """Arctic Spa Home Assistant integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -10,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import ArcticSpaClient
+from .api import ArcticSpaApiError, ArcticSpaClient
 from .const import (
     CONF_API_KEY,
     CONF_LOCAL_HOST,
@@ -113,7 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_config_entry_first_refresh()
             await client.wait_for_config(timeout=5.0)
             await client.wait_for_filters(timeout=3.0)
-        except Exception as err:
+        except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
             raise ConfigEntryNotReady(str(err)) from err
 
         coordinator.capabilities = resolve_mqtt_capabilities(
@@ -137,7 +138,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             await client.start(_on_local_update)
             await coordinator.async_config_entry_first_refresh()
-        except Exception as err:
+        except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
             raise ConfigEntryNotReady(str(err)) from err
 
         coordinator.capabilities = resolve_local_capabilities(
@@ -152,7 +153,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator = ArcticSpaCoordinator(hass, client)
         try:
             await coordinator.async_config_entry_first_refresh()
-        except Exception as err:
+        except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
             raise ConfigEntryNotReady(str(err)) from err
 
         coordinator.capabilities = resolve_rest_capabilities(coordinator.data or {})

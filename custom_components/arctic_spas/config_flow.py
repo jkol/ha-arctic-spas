@@ -141,7 +141,7 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
             password = user_input[CONF_MQTT_PASSWORD].strip()
 
             try:
-                spa_id = await self._validate_mqtt_credentials(username, password)
+                spa_id, spa_name = await self._validate_mqtt_credentials(username, password)
             except _MqttAuthError:
                 errors["base"] = "invalid_auth"
             except _MqttConnectError:
@@ -153,8 +153,9 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(spa_id)
                 self._abort_if_unique_id_configured()
 
+                title = spa_name if spa_name else "Arctic Spa (MQTT)"
                 return self.async_create_entry(
-                    title="Arctic Spa (MQTT)",
+                    title=title,
                     data={
                         CONF_MODE: ConnectionMode.MQTT,
                         CONF_MQTT_USERNAME: username,
@@ -215,10 +216,13 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def _validate_mqtt_credentials(self, username: str, password: str) -> str:
-        """Run two-round MQTT auth flow and return the spa ID on success.
+    async def _validate_mqtt_credentials(
+        self, username: str, password: str
+    ) -> tuple[str, str]:
+        """Run two-round MQTT auth flow and return (spa_id, spa_name) on success.
 
-        Returns the Spas[0].Id string, which becomes the unique_id for the entry.
+        spa_id  — Spas[0].Id, used as the config entry unique_id.
+        spa_name — Spas[0].Name as entered by the user in the app, used as entry title.
         Raises _MqttAuthError on bad credentials, _MqttConnectError on network failure.
         """
         session = async_get_clientsession(self.hass)
@@ -282,7 +286,8 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
         if not spa_id:
             raise _MqttAuthError("Spa ID missing from round-2 response")
 
-        return str(spa_id)
+        spa_name: str = spas[0].get("Name") or spas[0].get("name") or ""
+        return str(spa_id), spa_name
 
 
 class _MqttAuthError(Exception):

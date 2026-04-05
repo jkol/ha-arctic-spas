@@ -28,6 +28,8 @@ import hashlib
 import json
 import os
 import sys
+import threading
+import time
 import uuid
 from datetime import datetime
 
@@ -166,6 +168,7 @@ def on_connect(client, userdata, flags, rc):
     msg = RC_CODES.get(rc, f"Unknown rc={rc}")
     print(f"[mqtt] {msg}")
     if rc == 0:
+        userdata["reconnect_attempt"][0] = 0  # reset backoff on success
         for topic in userdata["topics"]:
             client.subscribe(topic)
             print(f"[mqtt] Subscribed → {topic}")
@@ -185,6 +188,7 @@ def on_message(client, userdata, msg):
 def on_disconnect(client, userdata, rc):
     if rc != 0:
         print(f"[mqtt] Unexpected disconnect rc={rc}")
+        userdata["reconnect_event"].set()
 
 
 # ---------------------------------------------------------------------------
@@ -228,9 +232,15 @@ def main():
         f"arctic/spa/{spa_id}/telemetry/filters",
         f"arctic/spa/{spa_id}/telemetry/errors",
         f"arctic/spa/{spa_id}/telemetry/spaboy",
+        f"arctic/spa/{spa_id}/telemetry/heartbeat",
+        f"arctic/spa/{spa_id}/telemetry/update",
+        f"arctic/spa/{spa_id}/telemetry/rfid",
         f"arctic/spa/{spa_id}/settings/spa",
+        f"arctic/spa/{spa_id}/settings/spaboy",
         f"arctic/spa/{spa_id}/config/spa",
-        f"arctic/spa/{spa_id}/information/spa"  
+        f"arctic/spa/{spa_id}/information/spa",
+        f"arctic/spa/{spa_id}/information/network",
+        f"arctic/spa/{spa_id}/settings/peak",
     ]
 
     # Choose broker path based on JWT audience
@@ -241,10 +251,18 @@ def main():
     except ImportError:
         sys.exit("paho-mqtt not installed — run: pip install paho-mqtt")
 
+    reconnect_event = threading.Event()
+    reconnect_attempt = [0]  # mutable so on_connect callback can reset it
+    _reconnect_delays = [5, 30, 300, 600]
+
     mqtt_client = mqtt.Client(
         client_id=f"ha-spa-monitor_{install_id[:8]}",
         transport="websockets" if use_aws else "tcp",
-        userdata={"topics": topics},
+        userdata={
+            "topics": topics,
+            "reconnect_event": reconnect_event,
+            "reconnect_attempt": reconnect_attempt,
+        },
     )
     mqtt_client.on_connect    = on_connect
     mqtt_client.on_message    = on_message
@@ -268,12 +286,40 @@ def main():
     print(f"[mqtt] Connecting to {broker_host}:{broker_port} ...")
     try:
         mqtt_client.connect(broker_host, broker_port, keepalive=60)
-        mqtt_client.loop_forever()
+    except Exception as e:
+        sys.exit(f"[error] {e}")
+
+    mqtt_client.loop_start()
+    try:
+        while True:
+            if not reconnect_event.wait(timeout=1.0):
+                continue
+            reconnect_event.clear()
+
+            attempt = reconnect_attempt[0]
+            delay = _reconnect_delays[min(attempt, len(_reconnect_delays) - 1)]
+            reconnect_attempt[0] += 1
+            print(f"[mqtt] Reconnecting in {delay}s (attempt {attempt + 1}, fetching fresh token)...")
+            time.sleep(delay)
+
+            try:
+                _, _, pw_hash = fetch_salt_and_authenticate(args.username, args.password)
+                token = fetch_token(args.username, pw_hash, client_id, first_spa, user_id)
+                if use_aws:
+                    mqtt_username = f"{token}?x-amz-customauthorizer-name={AUTHORIZER}"
+                else:
+                    mqtt_username = token
+                mqtt_client.username_pw_set(mqtt_username, "anything")
+                mqtt_client.reconnect()
+            except Exception as e:
+                print(f"[mqtt] Reconnect error: {e}")
+                reconnect_event.set()  # retry after next backoff
+
     except KeyboardInterrupt:
         print("\n[mqtt] Disconnecting.")
         mqtt_client.disconnect()
-    except Exception as e:
-        sys.exit(f"[error] {e}")
+    finally:
+        mqtt_client.loop_stop()
 
 
 if __name__ == "__main__":

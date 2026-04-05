@@ -17,9 +17,15 @@ Topics subscribed:
   arctic/spa/{spa_id}/telemetry/filters
   arctic/spa/{spa_id}/telemetry/errors
   arctic/spa/{spa_id}/telemetry/spaboy
+  arctic/spa/{spa_id}/telemetry/heartbeat
+  arctic/spa/{spa_id}/telemetry/update   (firmware progress — raw log only; Phase 2 will parse)
+  arctic/spa/{spa_id}/telemetry/rfid     (RFID tag events — raw log only; Phase 2 will parse)
   arctic/spa/{spa_id}/settings/spa
-  arctic/spa/{spa_id}/config/spa        (capability manifest — populates get_config())
-  arctic/spa/{spa_id}/information/spa   (model/firmware info — populates get_info())
+  arctic/spa/{spa_id}/settings/spaboy    (ORP/pH target ranges — populates spaboy_orp_*/ph_*)
+  arctic/spa/{spa_id}/config/spa         (capability manifest — populates get_config())
+  arctic/spa/{spa_id}/information/spa    (model/firmware info — populates get_info())
+  arctic/spa/{spa_id}/information/network (Wi-Fi info — raw log only; Phase 2 will parse)
+  arctic/spa/{spa_id}/settings/peak      (peak-pricing schedule — raw log only; Phase 2 will parse)
 """
 from __future__ import annotations
 
@@ -42,7 +48,11 @@ from .spa_data import (
     normalise_mqtt_errors,
     normalise_mqtt_filters,
     normalise_mqtt_information_spa,
+    normalise_mqtt_network_info,
+    normalise_mqtt_rfid,
+    normalise_mqtt_settings_peak,
     normalise_mqtt_settings_spa,
+    normalise_mqtt_settings_spaboy,
     normalise_mqtt_spa,
     normalise_mqtt_spaboy,
 )
@@ -51,15 +61,19 @@ _LOGGER = logging.getLogger(__name__)
 
 _AUTH_URL = "https://myarcticspa.com/api/auth"
 _TOKEN_URL = "https://api.myarcticspa.com/access_token"
+# OAuth client credential from the official My Arctic Spa mobile app.
+# This is a fixed API registration value embedded in the APK, not a user password.
+_MQTT_API_CLIENT_SECRET = "@4EUu^Y:U+FGtt2P"
 _BROKER_TCP = ("broker.myarcticspa.com", 1884)
 _BROKER_WSS = ("a2t84nz00o45m2-ats.iot.ca-central-1.amazonaws.com", 443)
 _AUTHORIZER = "MyArcticSpaCustomAuthorizer_Prod"
 
-# Reconnect delay sequence (seconds): 5s, 30s, 5 min; then retry from scratch every 10 min
-_RECONNECT_DELAYS = [5, 30, 300]
-_RECONNECT_LONG_RETRY = 600  # 10 min — used after all short delays are exhausted
+# Reconnect delay sequence (seconds): 5s, 30s, 5 min, 10 min, 30 min, 1 hour
+_RECONNECT_DELAYS = [5, 30, 300, 600, 1800, 3600]
+_MAX_RECONNECT_ATTEMPTS = 12
 
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=10)
+_AUTH_MIN_INTERVAL = 60.0  # minimum seconds between authentication attempts
 
 
 class ArcticSpaMqttClient(ArcticSpaClientBase):
@@ -117,6 +131,10 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         # callback triggered by our own disconnect() call does not schedule a
         # second concurrent reconnect on top of the one already in progress.
         self._reconnecting: bool = False
+
+        # Minimum wall-clock time between _authenticate() calls to avoid
+        # hammering the auth server during reconnect loops.
+        self._last_auth_ts: float = 0.0
 
         # Set when the first config/spa message is received — lets __init__.py
         # wait for the capability manifest before resolving SpaCapabilities.
@@ -271,8 +289,45 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         return {}
 
     async def activate_boost(self) -> dict[str, Any]:
-        """Activate boost mode."""
+        """Activate filtration boost mode."""
         self._publish_command({"boost": 1})
+        return {}
+
+    def _publish_spaboy_settings(self, fields: dict[str, Any]) -> None:
+        """Publish a spaboySettings envelope to the spa's controls topic.
+
+        Topic: arctic/spa/{spa_id}/controls/spa  QoS 0
+        Envelope: {"spaboySettings": {"source": {"name": "HA"}, <field>: <value>, ...}}
+
+        Used for SpaBoy ORP/pH target adjustments — separate wrapper from spaCommand/spaSettings.
+        """
+        if self._mqtt_client is None or self._spa_id is None:
+            raise ArcticSpaApiError("MQTT not connected — cannot send SpaBoy settings")
+        payload = json.dumps(
+            {"spaboySettings": {"source": {"name": "HA"}, **fields}}
+        )
+        self._mqtt_client.publish(
+            f"arctic/spa/{self._spa_id}/controls/spa",
+            payload,
+            qos=0,
+        )
+
+    async def activate_spaboy_boost(self) -> dict[str, Any]:
+        """Activate SpaBoy chlorine boost.
+
+        Uses the same spaCommand.boost field as filtration boost — the spa's
+        firmware routes this to the SpaBoy controller when SpaBoy hardware is present.
+        """
+        self._publish_command({"boost": 1})
+        return {}
+
+    async def set_spaboy_orp(self, orp_low: int, orp_high: int) -> dict[str, Any]:
+        """Set the SpaBoy ORP (chlorine) target range.
+
+        Fields: orpLow / orpHigh (int mV) in the spaboySettings envelope.
+        Presets confirmed from APK: Low=545/555, Mid=645/655, High=745/755.
+        """
+        self._publish_spaboy_settings({"orpLow": orp_low, "orpHigh": orp_high})
         return {}
 
     async def set_sds(self, on: bool) -> dict[str, Any]:
@@ -387,7 +442,27 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                     telemetry_age,
                     any_msg_age,
                 )
-                continue
+                if self._on_update is not None:
+                    self._on_update(snapshot)
+                # Reset timestamp so we don't fire again every 60 s while reconnecting.
+                self._last_telemetry_ts = 0.0
+                # Skip if a reconnect is already pending or in progress.
+                if self._reconnect_handle is not None or self._reconnecting:
+                    _LOGGER.debug("MQTT: reconnect already pending — skipping staleness teardown")
+                    continue
+                # Tear down paho — set _reconnecting first so the resulting
+                # _on_mqtt_disconnect callback doesn't queue a duplicate reconnect.
+                self._reconnecting = True
+                if self._mqtt_client is not None:
+                    try:
+                        self._mqtt_client.disconnect()
+                        await asyncio.sleep(0.5)  # allow DISCONNECT packet to flush
+                        self._mqtt_client.loop_stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._mqtt_client = None
+                self._reconnecting = False
+                self._schedule_reconnect()
 
             # Nothing at all has arrived for _STALE_THRESHOLD seconds — treat
             # as a dead connection and reconnect.
@@ -428,6 +503,9 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         if self._mqtt_client is not None:
             try:
                 self._mqtt_client.disconnect()
+                # Brief pause so paho can send the MQTT DISCONNECT packet
+                # before the network loop thread is killed.
+                await asyncio.sleep(0.5)
                 self._mqtt_client.loop_stop()
             except Exception:  # noqa: BLE001
                 pass
@@ -444,6 +522,14 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         - self._jwt and self._jwt_exp are set
         - self.__password is cleared
         """
+        now = time.monotonic()
+        elapsed = now - self._last_auth_ts
+        if elapsed < _AUTH_MIN_INTERVAL:
+            wait = _AUTH_MIN_INTERVAL - elapsed
+            _LOGGER.debug("MQTT: rate-limiting auth — waiting %.0fs", wait)
+            await asyncio.sleep(wait)
+        self._last_auth_ts = time.monotonic()
+
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             # Round 1 — obtain salt
             salt = await self._fetch_salt(session)
@@ -551,7 +637,7 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         payload = {
             "grant_type": "password",
             "client_id": client_id,
-            "client_secret": "@4EUu^Y:U+FGtt2P",
+            "client_secret": _MQTT_API_CLIENT_SECRET,
             "username": compound_username,
             "password": self._pw_hash,
             "spa": spa,
@@ -599,9 +685,14 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
             f"arctic/spa/{self._spa_id}/telemetry/errors",
             f"arctic/spa/{self._spa_id}/telemetry/spaboy",
             f"arctic/spa/{self._spa_id}/telemetry/heartbeat",
+            f"arctic/spa/{self._spa_id}/telemetry/update",
+            f"arctic/spa/{self._spa_id}/telemetry/rfid",
             f"arctic/spa/{self._spa_id}/settings/spa",
+            f"arctic/spa/{self._spa_id}/settings/spaboy",
             f"arctic/spa/{self._spa_id}/config/spa",
             f"arctic/spa/{self._spa_id}/information/spa",
+            f"arctic/spa/{self._spa_id}/information/network",
+            f"arctic/spa/{self._spa_id}/settings/peak",
         ]
 
         mqtt = await async_import_module(self._hass, "paho.mqtt.client")
@@ -648,9 +739,8 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         loop = self._hass.loop
         await loop.run_in_executor(
             None,
-            lambda: (client.connect(broker_host, broker_port, keepalive=60), client.loop_start()),
+            lambda: (client.connect(broker_host, broker_port, keepalive=300), client.loop_start()),
         )
-        self._reconnect_attempt = 0
 
     # ── Internal: paho callbacks (background thread) ─────────────────────────
 
@@ -665,6 +755,7 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
             for topic in userdata.get("topics", []):
                 client.subscribe(topic)
                 _LOGGER.debug("MQTT: subscribed to %s", topic)
+            self._reconnect_attempt = 0
         else:
             _LOGGER.warning("MQTT: broker refused connection — %s", reason_code)
 
@@ -759,6 +850,8 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                     )
                 elif topic_key == "settings/spa":
                     normalise_mqtt_settings_spa(payload, self._state)
+                elif topic_key == "settings/spaboy":
+                    normalise_mqtt_settings_spaboy(payload, self._state)
                 elif topic_key == "config/spa":
                     self._config = normalise_mqtt_config_spa(payload)
                     _LOGGER.debug("MQTT: received spa capability config (%d fields)", len(self._config))
@@ -768,6 +861,15 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                     self._info = normalise_mqtt_information_spa(payload)
                     _LOGGER.debug("MQTT: received spa information: %s", self._info)
                     return  # info does not trigger a state update
+                elif topic_key == "telemetry/update":
+                    _LOGGER.debug("MQTT: telemetry/update raw: %s", payload)
+                    return  # informational only — no state update
+                elif topic_key == "telemetry/rfid":
+                    normalise_mqtt_rfid(payload, self._state)
+                elif topic_key == "information/network":
+                    normalise_mqtt_network_info(payload, self._state)
+                elif topic_key == "settings/peak":
+                    normalise_mqtt_settings_peak(payload, self._state)
                 else:
                     _LOGGER.debug("MQTT: ignoring unknown topic %r", topic_key)
                     return
@@ -821,24 +923,21 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
             _LOGGER.debug("MQTT: reconnect already scheduled — ignoring duplicate request")
             return
 
-        if self._reconnect_attempt >= len(_RECONNECT_DELAYS):
-            _LOGGER.warning(
-                "MQTT: %d consecutive reconnect failures — will retry in %ds",
+        if self._reconnect_attempt >= _MAX_RECONNECT_ATTEMPTS:
+            _LOGGER.error(
+                "MQTT: %d consecutive reconnect failures — giving up. "
+                "Reload the integration to retry.",
                 self._reconnect_attempt,
-                _RECONNECT_LONG_RETRY,
-            )
-            self._reconnect_attempt = 0
-            loop = self._hass.loop
-            self._reconnect_handle = loop.call_later(
-                _RECONNECT_LONG_RETRY, self._do_reconnect
             )
             return
 
-        delay = _RECONNECT_DELAYS[self._reconnect_attempt]
+        delay_idx = min(self._reconnect_attempt, len(_RECONNECT_DELAYS) - 1)
+        delay = _RECONNECT_DELAYS[delay_idx]
         self._reconnect_attempt += 1
         _LOGGER.info(
-            "MQTT: scheduling reconnect attempt %d in %ds",
+            "MQTT: scheduling reconnect attempt %d/%d in %ds",
             self._reconnect_attempt,
+            _MAX_RECONNECT_ATTEMPTS,
             delay,
         )
         loop = self._hass.loop
@@ -866,6 +965,7 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                 _LOGGER.debug("MQTT: tearing down old paho client before reconnect")
                 try:
                     self._mqtt_client.disconnect()
+                    await asyncio.sleep(0.5)  # flush DISCONNECT packet
                     self._mqtt_client.loop_stop()
                 except Exception:  # noqa: BLE001
                     pass

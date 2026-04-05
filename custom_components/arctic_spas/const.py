@@ -1,4 +1,5 @@
 """Constants for the Arctic Spas integration."""
+from enum import StrEnum
 from typing import Final
 
 DOMAIN = "arctic_spas"
@@ -16,12 +17,12 @@ CONF_LOCAL_PORT = "local_port"
 DEFAULT_LOCAL_PORT = 12121
 
 
-class ConnectionMode:
+class ConnectionMode(StrEnum):
     """Connection mode identifiers for config entry data."""
 
-    REST: Final[str]  = "rest"
-    MQTT: Final[str]  = "mqtt"
-    LOCAL: Final[str] = "local"
+    REST  = "rest"
+    MQTT  = "mqtt"
+    LOCAL = "local"
 
 
 # ---------------------------------------------------------------------------

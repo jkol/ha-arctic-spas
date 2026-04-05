@@ -65,8 +65,12 @@ class ArcticSpaClientBase(ABC):
     async def activate_boost(self) -> dict[str, Any]: ...
 
     async def activate_spaboy_boost(self) -> dict[str, Any]:
-        """Activate SpaBoy chlorine boost.  Only supported in local mode."""
+        """Activate SpaBoy chlorine boost.  Supported in local and MQTT modes."""
         raise ArcticSpaApiError("SpaBoy boost is not supported in this connection mode")
+
+    async def set_spaboy_orp(self, orp_low: int, orp_high: int) -> dict[str, Any]:
+        """Set SpaBoy ORP target range (mV).  Supported in local and MQTT modes."""
+        raise ArcticSpaApiError("SpaBoy ORP control is not supported in this connection mode")
 
     @abstractmethod
     async def set_sds(self, on: bool) -> dict[str, Any]: ...

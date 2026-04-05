@@ -204,7 +204,7 @@ def _parse_spaboy_live(payload: bytes, existing: dict[str, Any]) -> None:
         existing["orp"] = orp
         existing["orp_status"] = _compute_orp_status(orp)
     if 3 in f:
-        ph = f[3] / 100.0
+        ph = round(f[3] / 100.0, 2)
         existing["ph"] = ph
         existing["ph_status"] = _compute_ph_status(ph)
 
@@ -489,7 +489,7 @@ class ArcticSpaLocalClient(ArcticSpaClientBase):
         try:
             self._writer.write(_build_command(payload))
             await self._writer.drain()
-        except Exception as err:
+        except (OSError, asyncio.TimeoutError) as err:
             raise ArcticSpaApiError(f"Command failed: {err}") from err
 
     # ── Control commands ─────────────────────────────────────────────────────
@@ -591,6 +591,20 @@ class ArcticSpaLocalClient(ArcticSpaClientBase):
         # SpaBoy chlorine boost: coldfire SpaCommand field 19 (SPABOY_BOOST), packet type 0x0001.
         # Source: SpaBoyController$1.smali → SpaCommand.setSpaboyBoost(true).
         await self._send_command(_proto_field(19, 1))
+        return {}
+
+    async def set_spaboy_orp(self, orp_low: int, orp_high: int) -> dict[str, Any]:
+        # SpaBoy ORP target range: packet type 0x0032 with spaboySettings proto.
+        # fields 6=orpHigh, 7=orpLow (confirmed from SpaBoyController APK).
+        # Presets: Low=545/555, Mid=645/655, High=745/755 mV.
+        payload = _proto_field(6, orp_high) + _proto_field(7, orp_low)
+        if not self._writer or self._writer.is_closing():
+            raise ArcticSpaApiError("Not connected to spa")
+        try:
+            self._writer.write(_build_packet(0x0032, payload))
+            await self._writer.drain()
+        except Exception as err:
+            raise ArcticSpaApiError(f"Command failed: {err}") from err
         return {}
 
     async def set_sds(self, on: bool) -> dict[str, Any]:

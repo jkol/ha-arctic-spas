@@ -22,6 +22,7 @@ def device_info(
         "identifiers": {(DOMAIN, entry.entry_id)},
         "name": "Arctic Spas",
         "manufacturer": "Arctic Spas",
+        "configuration_url": "https://myarcticspa.com",
     }
     if capabilities is not None:
         if capabilities.model:
