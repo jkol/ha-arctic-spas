@@ -129,6 +129,12 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         # Used by the staleness check to set connected=False when the spa
         # stops reporting (e.g. cloud outage, spa Wi-Fi drop).
         self._last_telemetry_ts: float = 0.0
+        # Monotonic timestamp of the last received MQTT message on any topic.
+        # Used to distinguish a truly dead connection (nothing arriving) from a
+        # live connection where the spa has simply gone quiet on telemetry/spa.
+        # If any message is still flowing (heartbeat, settings, etc.) we leave
+        # the connection alone even if telemetry/spa has been silent.
+        self._last_any_msg_ts: float = 0.0
         self._staleness_task: asyncio.Task | None = None
 
     # ── Public properties ────────────────────────────────────────────────────
@@ -331,47 +337,84 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
             return False
 
     async def _staleness_check_loop(self) -> None:
-        """Background task: detect silent telemetry and force a reconnect.
+        """Background task: detect a truly silent broker and force a reconnect.
 
-        Runs every 60 s on the HA event loop. If no telemetry/spa message has
-        been received for 5 minutes we push connected=False and tear down the
-        MQTT connection so _schedule_reconnect can re-establish it.  This handles
-        the case where the TCP socket stays open (keepalive succeeds) but the
-        broker has silently stopped delivering messages — on_disconnect never
-        fires in that scenario, so we have to act here instead.
+        Runs every 60 s on the HA event loop.  We distinguish two cases:
+
+        1. telemetry/spa is quiet but other messages are still arriving
+           (heartbeats, retained settings, etc.) — the MQTT connection is
+           healthy; the spa is simply not publishing telemetry continuously.
+           We log a debug note and leave the connection alone.
+
+        2. No MQTT message of any kind has arrived for _STALE_THRESHOLD
+           seconds — the TCP socket has gone zombie (keepalive failed silently,
+           or the broker is down).  Only in this case do we push
+           connected=False and tear down so _schedule_reconnect can recover.
         """
-        _STALE_THRESHOLD = 300.0  # 5 minutes
+        _STALE_THRESHOLD = 300.0  # 5 minutes with no messages at all
         while not self._stopping:
             try:
                 await asyncio.sleep(60)
             except asyncio.CancelledError:
                 return
-            if self._stopping or self._last_telemetry_ts == 0.0:
+            if self._stopping:
                 continue
-            age = time.monotonic() - self._last_telemetry_ts
-            if age > _STALE_THRESHOLD:
-                with self._state_lock:
-                    self._state["connected"] = False
-                    snapshot = self._state.copy()
-                _LOGGER.warning(
-                    "MQTT: no telemetry/spa for %.0fs — forcing reconnect", age
+            # Nothing received yet — nothing to check.
+            if self._last_telemetry_ts == 0.0 and self._last_any_msg_ts == 0.0:
+                continue
+            telemetry_age = (
+                time.monotonic() - self._last_telemetry_ts
+                if self._last_telemetry_ts > 0.0
+                else float("inf")
+            )
+            if telemetry_age <= _STALE_THRESHOLD:
+                continue
+
+            # telemetry/spa has gone quiet — check whether ANY message has
+            # arrived recently before deciding to reconnect.
+            any_msg_age = (
+                time.monotonic() - self._last_any_msg_ts
+                if self._last_any_msg_ts > 0.0
+                else telemetry_age
+            )
+            if any_msg_age <= _STALE_THRESHOLD:
+                # Connection is alive — spa just isn't publishing telemetry/spa
+                # continuously.  Don't tear down; data will update next time the
+                # spa publishes (e.g. after a setting change or the next cycle).
+                _LOGGER.debug(
+                    "MQTT: telemetry/spa silent for %.0fs but broker still active "
+                    "(last message %.0fs ago) — leaving connection alone",
+                    telemetry_age,
+                    any_msg_age,
                 )
-                if self._on_update is not None:
-                    self._on_update(snapshot)
-                # Reset timestamp so we don't fire again every 60 s while reconnecting.
-                self._last_telemetry_ts = 0.0
-                # Tear down paho — set _reconnecting first so the resulting
-                # _on_mqtt_disconnect callback doesn't queue a duplicate reconnect.
-                self._reconnecting = True
-                if self._mqtt_client is not None:
-                    try:
-                        self._mqtt_client.disconnect()
-                        self._mqtt_client.loop_stop()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    self._mqtt_client = None
-                self._reconnecting = False
-                self._schedule_reconnect()
+                continue
+
+            # Nothing at all has arrived for _STALE_THRESHOLD seconds — treat
+            # as a dead connection and reconnect.
+            with self._state_lock:
+                self._state["connected"] = False
+                snapshot = self._state.copy()
+            _LOGGER.warning(
+                "MQTT: no messages for %.0fs — connection appears dead, forcing reconnect",
+                any_msg_age,
+            )
+            if self._on_update is not None:
+                self._on_update(snapshot)
+            # Reset timestamps so we don't fire again every 60 s while reconnecting.
+            self._last_telemetry_ts = 0.0
+            self._last_any_msg_ts = 0.0
+            # Tear down paho — set _reconnecting first so the resulting
+            # _on_mqtt_disconnect callback doesn't queue a duplicate reconnect.
+            self._reconnecting = True
+            if self._mqtt_client is not None:
+                try:
+                    self._mqtt_client.disconnect()
+                    self._mqtt_client.loop_stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._mqtt_client = None
+            self._reconnecting = False
+            self._schedule_reconnect()
 
     async def stop(self) -> None:
         """Disconnect the MQTT client and cancel any pending reconnect."""
@@ -631,6 +674,11 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         Normalises the payload and merges it into self._state, then schedules
         on_update on the HA event loop via call_soon_threadsafe.
         """
+        # Track receipt time for any message — used by the staleness check to
+        # distinguish a truly silent broker from a spa that just isn't publishing
+        # telemetry/spa continuously.
+        self._last_any_msg_ts = time.monotonic()
+
         # Use last two path segments to distinguish e.g. telemetry/spa vs settings/spa.
         parts = msg.topic.split("/")
         topic_key = "/".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
@@ -822,10 +870,13 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                 except Exception:  # noqa: BLE001
                     pass
                 self._mqtt_client = None
-            # Reset heartbeat/server-status state so the new connection re-negotiates
+            # Reset heartbeat/server-status state so the new connection re-negotiates.
+            # Also reset message timestamps so the staleness check starts fresh.
             self._heartbeat_server = None
             self._heartbeat_instance = None
             self._server_status_topic = None
+            self._last_telemetry_ts = 0.0
+            self._last_any_msg_ts = 0.0
 
             try:
                 await self._connect_mqtt()
