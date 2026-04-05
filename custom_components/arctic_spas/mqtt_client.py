@@ -115,6 +115,13 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         self._use_aws: bool = False
         self._install_id: str = str(uuid.uuid4())
 
+        # Connectivity state — two independent flags, derived into one.
+        # broker_connected: paho session to MQTT broker is alive
+        # spa_online: mothership server status says spa↔cloud link is up
+        # connected (derived): broker_connected AND spa_online
+        self._broker_connected: bool = False
+        self._spa_online: bool = True  # optimistic default until server status says otherwise
+
         # Heartbeat + server-status liveness tracking.
         # telemetry/heartbeat carries {server, instance, online, when}.
         # After receiving a heartbeat we subscribe to server/{server_id}/status
@@ -166,6 +173,16 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
     def spa_id(self) -> str | None:
         """Spa UUID discovered during authentication."""
         return self._spa_id
+
+    def _sync_connected_state(self) -> dict[str, Any]:
+        """Write broker_connected, spa_online, and derived connected into _state.
+
+        Must be called with _state_lock held.  Returns a snapshot of _state.
+        """
+        self._state["broker_connected"] = self._broker_connected
+        self._state["spa_online"] = self._spa_online
+        self._state["connected"] = self._broker_connected and self._spa_online
+        return self._state.copy()
 
     # ── ArcticSpaClientBase interface ────────────────────────────────────────
 
@@ -442,33 +459,13 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                     telemetry_age,
                     any_msg_age,
                 )
-                if self._on_update is not None:
-                    self._on_update(snapshot)
-                # Reset timestamp so we don't fire again every 60 s while reconnecting.
-                self._last_telemetry_ts = 0.0
-                # Skip if a reconnect is already pending or in progress.
-                if self._reconnect_handle is not None or self._reconnecting:
-                    _LOGGER.debug("MQTT: reconnect already pending — skipping staleness teardown")
-                    continue
-                # Tear down paho — set _reconnecting first so the resulting
-                # _on_mqtt_disconnect callback doesn't queue a duplicate reconnect.
-                self._reconnecting = True
-                if self._mqtt_client is not None:
-                    try:
-                        self._mqtt_client.disconnect()
-                        await asyncio.sleep(0.5)  # allow DISCONNECT packet to flush
-                        self._mqtt_client.loop_stop()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    self._mqtt_client = None
-                self._reconnecting = False
-                self._schedule_reconnect()
+                continue
 
             # Nothing at all has arrived for _STALE_THRESHOLD seconds — treat
             # as a dead connection and reconnect.
             with self._state_lock:
-                self._state["connected"] = False
-                snapshot = self._state.copy()
+                self._broker_connected = False
+                snapshot = self._sync_connected_state()
             _LOGGER.warning(
                 "MQTT: no messages for %.0fs — connection appears dead, forcing reconnect",
                 any_msg_age,
@@ -520,7 +517,6 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         - self._pw_hash is set (stable per plaintext password)
         - self._spa_id is set
         - self._jwt and self._jwt_exp are set
-        - self.__password is cleared
         """
         now = time.monotonic()
         elapsed = now - self._last_auth_ts
@@ -750,12 +746,17 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         """paho on_connect callback — runs on paho background thread."""
         if not reason_code.is_failure:
             _LOGGER.info(
-                "MQTT: broker connection established — waiting for spa telemetry to confirm spa is online"
+                "MQTT: broker connection established — waiting for server status to confirm spa is online"
             )
             for topic in userdata.get("topics", []):
                 client.subscribe(topic)
                 _LOGGER.debug("MQTT: subscribed to %s", topic)
             self._reconnect_attempt = 0
+            with self._state_lock:
+                self._broker_connected = True
+                snapshot = self._sync_connected_state()
+            if self._on_update is not None:
+                self._hass.loop.call_soon_threadsafe(self._on_update, snapshot)
         else:
             _LOGGER.warning("MQTT: broker refused connection — %s", reason_code)
 
@@ -832,11 +833,12 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                         if self._heartbeat_instance
                         else True  # no heartbeat yet — trust server online flag
                     )
-                    connected = status_online and instance_match
-                    prev_connected = self._state.get("connected")
-                    self._state["connected"] = connected
-                    if connected != prev_connected:
-                        if connected:
+                    spa_online = status_online and instance_match
+                    prev_spa_online = self._spa_online
+                    self._spa_online = spa_online
+                    self._sync_connected_state()  # refreshes state dict
+                    if spa_online != prev_spa_online:
+                        if spa_online:
                             _LOGGER.info("MQTT: spa is online (mothership confirmed spa↔cloud connection)")
                         else:
                             _LOGGER.warning(
@@ -845,8 +847,8 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                                 status_online, instance_match,
                             )
                     _LOGGER.debug(
-                        "MQTT: server status online=%s instance_match=%s → connected=%s",
-                        status_online, instance_match, connected,
+                        "MQTT: server status online=%s instance_match=%s → spa_online=%s",
+                        status_online, instance_match, spa_online,
                     )
                 elif topic_key == "settings/spa":
                     normalise_mqtt_settings_spa(payload, self._state)
@@ -903,11 +905,11 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
             "MQTT: lost broker connection (reason: %s) — spa data will be unavailable until reconnected",
             reason_code,
         )
-        # Immediately mark spa as unreachable so the Connected sensor reflects
-        # reality without waiting for the 5-minute staleness check.
+        # Immediately mark broker as disconnected so the Connected sensor
+        # reflects reality without waiting for the 5-minute staleness check.
         with self._state_lock:
-            self._state["connected"] = False
-            snapshot = self._state.copy()
+            self._broker_connected = False
+            snapshot = self._sync_connected_state()
         if self._on_update is not None:
             self._hass.loop.call_soon_threadsafe(self._on_update, snapshot)
         self._hass.loop.call_soon_threadsafe(self._schedule_reconnect)
@@ -972,9 +974,11 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                 self._mqtt_client = None
             # Reset heartbeat/server-status state so the new connection re-negotiates.
             # Also reset message timestamps so the staleness check starts fresh.
+            # spa_online resets to True (optimistic) — will be refined by server status.
             self._heartbeat_server = None
             self._heartbeat_instance = None
             self._server_status_topic = None
+            self._spa_online = True
             self._last_telemetry_ts = 0.0
             self._last_any_msg_ts = 0.0
 

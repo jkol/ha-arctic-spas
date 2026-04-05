@@ -56,7 +56,6 @@ def test_power_calibration_value():
 def test_normalise_mqtt_spa_happy_path_all_canonical_keys(mqtt_spa_payload):
     result = normalise_mqtt_spa(mqtt_spa_payload)
     expected_keys = {
-        "connected",
         "errors",
         "temperatureF",
         "setpointF",
@@ -165,9 +164,10 @@ def test_normalise_mqtt_spa_filter_on_true_when_filtering(mqtt_spa_payload):
     assert result["filter_on"] is True
 
 
-def test_normalise_mqtt_spa_connected_always_true(mqtt_spa_payload):
+def test_normalise_mqtt_spa_no_connected_key(mqtt_spa_payload):
+    """connected is now derived by mqtt_client, not set by normalise_mqtt_spa."""
     result = normalise_mqtt_spa(mqtt_spa_payload)
-    assert result["connected"] is True
+    assert "connected" not in result
 
 
 def test_normalise_mqtt_spa_errors_default_empty_list(mqtt_spa_payload):

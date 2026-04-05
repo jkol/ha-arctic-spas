@@ -45,7 +45,14 @@ async def async_setup_entry(
 
 
 class ArcticSpaConnectedSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):
-    """Reports whether the spa is online and reachable."""
+    """Reports whether the spa is online and reachable.
+
+    In MQTT mode, connected = broker_connected AND spa_online:
+      - broker_connected: HA↔MQTT broker session is alive
+      - spa_online: mothership confirms spa↔cloud link is up
+    Both are exposed as extra state attributes for diagnostics.
+    In REST/Local modes, connected is set directly by the data source.
+    """
 
     _attr_has_entity_name = True
     _attr_name = "Connected"
@@ -59,6 +66,17 @@ class ArcticSpaConnectedSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySe
     @property
     def is_on(self) -> bool:
         return bool(self.coordinator.data.get("connected"))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data or {}
+        attrs: dict = {}
+        # MQTT mode populates these; REST/Local do not.
+        if "broker_connected" in data:
+            attrs["broker_connected"] = data["broker_connected"]
+        if "spa_online" in data:
+            attrs["spa_online"] = data["spa_online"]
+        return attrs
 
 
 class ArcticSpaErrorSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensorEntity):

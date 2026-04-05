@@ -106,14 +106,13 @@ _HEATER_STATUS_MAP: dict[int, str] = {0: "idle", 1: "warmup", 2: "heating", 3: "
 def normalise_mqtt_spa(payload: dict[str, Any]) -> dict[str, Any]:
     """Translate /telemetry/spa JSON to canonical dict.
 
-    Converts all known MQTT keys to canonical names, computes derived fields
-    (filter_on, power_w), and always sets connected=True (receiving data implies
-    connectivity).
+    Converts all known MQTT keys to canonical names and computes derived fields
+    (filter_on, power_w).  Does NOT set connected — that is derived separately
+    by mqtt_client from broker_connected and spa_online signals.
 
     Unknown MQTT keys are silently ignored.
     """
     result: dict[str, Any] = {
-        "connected": True,
         "errors": [],
         "data_timestamp": time.monotonic(),
     }
