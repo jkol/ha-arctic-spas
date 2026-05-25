@@ -18,11 +18,9 @@ from .api import ArcticSpaApiError, ArcticSpaAuthError, ArcticSpaClient
 from .const import (
     CONF_API_KEY,
     CONF_LOCAL_HOST,
-    CONF_LOCAL_PORT,
     CONF_MODE,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_USERNAME,
-    DEFAULT_LOCAL_PORT,
     DOMAIN,
     ConnectionMode,
 )
@@ -53,9 +51,6 @@ STEP_MQTT_SCHEMA = vol.Schema(
 STEP_LOCAL_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_LOCAL_HOST): str,
-        vol.Required(CONF_LOCAL_PORT, default=DEFAULT_LOCAL_PORT): vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=65535)
-        ),
     }
 )
 
@@ -172,32 +167,34 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_local(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 2c: Local mode — validate by opening a TCP connection to port 12121."""
+        """Step 2c: Local mode — validate by connecting to ws://<host>:8765."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             host = user_input[CONF_LOCAL_HOST].strip()
-            port = int(user_input[CONF_LOCAL_PORT])
 
             try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, port, limit=1024),
+                session = async_get_clientsession(self.hass)
+                ws = await asyncio.wait_for(
+                    session.ws_connect(
+                        f"ws://{host}:8765",
+                        origin=f"http://{host}",
+                    ),
                     timeout=_TCP_CONNECT_TIMEOUT,
                 )
-                writer.close()
-                try:
-                    await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
-                except Exception:  # noqa: BLE001
-                    pass
-            except ConnectionRefusedError:
-                errors["base"] = "port_not_open"
+                await ws.send_json({"query": 0})
+                msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
+                await ws.close()
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    errors["base"] = "cannot_connect"
             except (TimeoutError, asyncio.TimeoutError, OSError):
                 errors["base"] = "cannot_connect"
             except Exception:  # noqa: BLE001
-                _LOGGER.exception("Unexpected error during local TCP validation")
+                _LOGGER.exception("Unexpected error during local WebSocket validation")
                 errors["base"] = "unknown"
-            else:
-                unique_id = f"{host}:{port}"
+
+            if not errors:
+                unique_id = f"{host}:8765"
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
@@ -206,7 +203,6 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_MODE: ConnectionMode.LOCAL,
                         CONF_LOCAL_HOST: host,
-                        CONF_LOCAL_PORT: port,
                     },
                 )
 

@@ -24,7 +24,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import ArcticSpaCoordinator
-from .spa_data import resolve_local_capabilities, resolve_mqtt_capabilities, resolve_rest_capabilities
+from .spa_data import resolve_mqtt_capabilities, resolve_rest_capabilities
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -126,10 +126,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     elif mode == ConnectionMode.LOCAL:
-        from .local_api import ArcticSpaLocalClient  # noqa: PLC0415
+        from .websocket_client import ArcticSpaWebSocketClient, resolve_ws_capabilities  # noqa: PLC0415
 
         host = entry.data[CONF_LOCAL_HOST]
-        client = ArcticSpaLocalClient(host)
+        client = ArcticSpaWebSocketClient(host)
         coordinator = ArcticSpaCoordinator(hass, client, push_mode=True)
 
         def _on_local_update(data: dict[str, Any]) -> None:
@@ -138,14 +138,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         try:
             await client.start(_on_local_update)
             await coordinator.async_config_entry_first_refresh()
+            await client.wait_for_config(timeout=5.0)
         except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
             raise ConfigEntryNotReady(str(err)) from err
 
-        coordinator.capabilities = resolve_local_capabilities(
-            client.get_first_spa_live_fields(),
-            has_spaboy=client.has_spaboy,
+        coordinator.capabilities = resolve_ws_capabilities(
+            client.get_settings(), coordinator.data or {},
         )
-        _LOGGER.debug("Local capabilities resolved from first spa_live frame")
+        _LOGGER.debug(
+            "Local capabilities resolved via WebSocket (LPC %s, YOC %s)",
+            coordinator.capabilities.firmware_lpc,
+            coordinator.capabilities.firmware_yocto,
+        )
 
     else:  # ConnectionMode.REST (default)
         session = async_get_clientsession(hass)

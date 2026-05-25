@@ -27,11 +27,10 @@
         }
       },
       "local": {
-        "title": "Local Direct (no internet)",
-        "description": "Enter your spa's local IP address. Port 12121 is the standard LPC port.",
+        "title": "Local (no internet)",
+        "description": "Enter your spa's local IP address. Connects directly to the spa over your local network — no cloud dependency.",
         "data": {
-          "local_host": "Spa IP Address",
-          "local_port": "Port"
+          "local_host": "Spa IP Address"
         }
       }
     },

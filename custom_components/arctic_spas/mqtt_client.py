@@ -75,6 +75,11 @@ _MAX_RECONNECT_ATTEMPTS = 12
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=10)
 _AUTH_MIN_INTERVAL = 60.0  # minimum seconds between authentication attempts
 
+# Grace period before propagating a spa_online=False transition. Covers brief
+# cloud-link rotations (spa reconnects to the broker ≈ hourly) that otherwise
+# surface as Disconnected/Connected flaps.
+_SPA_OFFLINE_GRACE = 90.0
+
 
 class ArcticSpaMqttClient(ArcticSpaClientBase):
     """Cloud MQTT client for Arctic Spa.
@@ -161,6 +166,15 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         # the connection alone even if telemetry/spa has been silent.
         self._last_any_msg_ts: float = 0.0
         self._staleness_task: asyncio.Task | None = None
+
+        # Debounce handle for spa_online=False transitions. The spa's cloud
+        # link rotates periodically (≈ hourly) and during that rotation the
+        # retained server/{id}/status message briefly flips online=false then
+        # back to true with a new instance UUID. Without debouncing this
+        # surfaces as a Disconnected/Connected flap on every rotation. We
+        # delay propagating offline transitions by _SPA_OFFLINE_GRACE seconds
+        # and cancel the delayed propagation if the spa returns online first.
+        self._spa_offline_handle: asyncio.TimerHandle | None = None
 
     # ── Public properties ────────────────────────────────────────────────────
 
@@ -497,6 +511,9 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
         if self._reconnect_handle is not None:
             self._reconnect_handle.cancel()
             self._reconnect_handle = None
+        if self._spa_offline_handle is not None:
+            self._spa_offline_handle.cancel()
+            self._spa_offline_handle = None
         if self._mqtt_client is not None:
             try:
                 self._mqtt_client.disconnect()
@@ -834,22 +851,15 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
                         else True  # no heartbeat yet — trust server online flag
                     )
                     spa_online = status_online and instance_match
-                    prev_spa_online = self._spa_online
-                    self._spa_online = spa_online
-                    self._sync_connected_state()  # refreshes state dict
-                    if spa_online != prev_spa_online:
-                        if spa_online:
-                            _LOGGER.info("MQTT: spa is online (mothership confirmed spa↔cloud connection)")
-                        else:
-                            _LOGGER.warning(
-                                "MQTT: spa is offline — mothership reports spa↔cloud disconnected "
-                                "(online=%s instance_match=%s)",
-                                status_online, instance_match,
-                            )
                     _LOGGER.debug(
                         "MQTT: server status online=%s instance_match=%s → spa_online=%s",
                         status_online, instance_match, spa_online,
                     )
+                    # Hand off to the debounced applier on the HA event loop.
+                    self._hass.loop.call_soon_threadsafe(
+                        self._apply_spa_online, spa_online, status_online, instance_match
+                    )
+                    return  # debounced applier will push the state update
                 elif topic_key == "settings/spa":
                     normalise_mqtt_settings_spa(payload, self._state)
                 elif topic_key == "settings/spaboy":
@@ -882,6 +892,66 @@ class ArcticSpaMqttClient(ArcticSpaClientBase):
 
         if self._on_update is not None:
             self._hass.loop.call_soon_threadsafe(self._on_update, snapshot)
+
+    def _apply_spa_online(
+        self, spa_online: bool, status_online: bool, instance_match: bool
+    ) -> None:
+        """Apply a spa_online transition with debounce on offline transitions.
+
+        Runs on the HA event loop. Online transitions are applied immediately
+        and cancel any pending offline propagation. Offline transitions are
+        delayed by _SPA_OFFLINE_GRACE so brief cloud-link rotations don't
+        surface as Disconnected/Connected flaps to entities.
+        """
+        if spa_online:
+            # Cancel any pending offline propagation — the spa came back
+            # before the grace period elapsed.
+            if self._spa_offline_handle is not None:
+                self._spa_offline_handle.cancel()
+                self._spa_offline_handle = None
+            if self._spa_online:
+                return  # already online, nothing to do
+            with self._state_lock:
+                self._spa_online = True
+                snapshot = self._sync_connected_state()
+            _LOGGER.info("MQTT: spa is online (mothership confirmed spa↔cloud connection)")
+            if self._on_update is not None:
+                self._on_update(snapshot)
+            return
+
+        # Offline path — only schedule if we're currently online and nothing
+        # is already pending.
+        if not self._spa_online:
+            return
+        if self._spa_offline_handle is not None:
+            return
+        _LOGGER.debug(
+            "MQTT: spa reported offline (online=%s instance_match=%s) — "
+            "debouncing for %.0fs before propagating",
+            status_online, instance_match, _SPA_OFFLINE_GRACE,
+        )
+        self._spa_offline_handle = self._hass.loop.call_later(
+            _SPA_OFFLINE_GRACE,
+            self._fire_spa_offline,
+            status_online,
+            instance_match,
+        )
+
+    def _fire_spa_offline(self, status_online: bool, instance_match: bool) -> None:
+        """Grace period elapsed — propagate spa_online=False to entities."""
+        self._spa_offline_handle = None
+        if self._spa_online is False:
+            return
+        with self._state_lock:
+            self._spa_online = False
+            snapshot = self._sync_connected_state()
+        _LOGGER.warning(
+            "MQTT: spa is offline — mothership reports spa↔cloud disconnected "
+            "for >%.0fs (online=%s instance_match=%s)",
+            _SPA_OFFLINE_GRACE, status_online, instance_match,
+        )
+        if self._on_update is not None:
+            self._on_update(snapshot)
 
     def _on_mqtt_disconnect(
         self, client: Any, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any

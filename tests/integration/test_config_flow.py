@@ -5,12 +5,12 @@ from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.arctic_spas.api import ArcticSpaApiError, ArcticSpaAuthError
+import aiohttp
+
 from custom_components.arctic_spas.const import (
     CONF_API_KEY,
     CONF_LOCAL_HOST,
-    CONF_LOCAL_PORT,
     CONF_MODE,
-    DEFAULT_LOCAL_PORT,
     DOMAIN,
     ConnectionMode,
 )
@@ -46,11 +46,16 @@ async def _pick_local(hass, flow_id):
     )
 
 
-def _mock_open_connection():
-    """Return an AsyncMock for asyncio.open_connection that succeeds."""
-    mock_writer = MagicMock()
-    mock_writer.wait_closed = AsyncMock()
-    return AsyncMock(return_value=(MagicMock(), mock_writer))
+def _mock_ws_connect_success():
+    """Return a mock ws_connect that succeeds and returns live data."""
+    mock_ws = AsyncMock()
+    mock_ws.closed = False
+    mock_msg = MagicMock()
+    mock_msg.type = aiohttp.WSMsgType.TEXT
+    mock_ws.receive = AsyncMock(return_value=mock_msg)
+    mock_ws.send_json = AsyncMock()
+    mock_ws.close = AsyncMock()
+    return AsyncMock(return_value=mock_ws)
 
 
 # ---------------------------------------------------------------------------
@@ -221,13 +226,16 @@ async def test_rest_duplicate_entry_aborted(hass):
 # ---------------------------------------------------------------------------
 
 async def test_local_successful_setup(hass):
-    """Local: entry created when spa is reachable on port 12121."""
-    with patch("asyncio.open_connection", new=_mock_open_connection()):
+    """Local: entry created when spa WebSocket is reachable."""
+    with patch(
+        "custom_components.arctic_spas.config_flow.async_get_clientsession"
+    ) as mock_session:
+        mock_session.return_value.ws_connect = _mock_ws_connect_success()
         result = await _init_flow(hass)
         result = await _pick_local(hass, result["flow_id"])
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_LOCAL_HOST: MOCK_HOST, CONF_LOCAL_PORT: DEFAULT_LOCAL_PORT},
+            {CONF_LOCAL_HOST: MOCK_HOST},
         )
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -235,32 +243,34 @@ async def test_local_successful_setup(hass):
     assert result["data"][CONF_LOCAL_HOST] == MOCK_HOST
 
 
-async def test_local_port_not_open(hass):
-    """Local: connection refused shows port_not_open error."""
+async def test_local_cannot_connect_refused(hass):
+    """Local: connection refused shows cannot_connect error."""
     with patch(
-        "asyncio.open_connection", new=AsyncMock(side_effect=ConnectionRefusedError())
-    ):
+        "custom_components.arctic_spas.config_flow.async_get_clientsession"
+    ) as mock_session:
+        mock_session.return_value.ws_connect = AsyncMock(side_effect=OSError("refused"))
         result = await _init_flow(hass)
         result = await _pick_local(hass, result["flow_id"])
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_LOCAL_HOST: MOCK_HOST, CONF_LOCAL_PORT: DEFAULT_LOCAL_PORT},
+            {CONF_LOCAL_HOST: MOCK_HOST},
         )
 
     assert result["type"] == FlowResultType.FORM
-    assert result["errors"] == {"base": "port_not_open"}
+    assert result["errors"] == {"base": "cannot_connect"}
 
 
 async def test_local_cannot_connect(hass):
     """Local: timeout shows cannot_connect error."""
     with patch(
-        "asyncio.open_connection", new=AsyncMock(side_effect=TimeoutError())
-    ):
+        "custom_components.arctic_spas.config_flow.async_get_clientsession"
+    ) as mock_session:
+        mock_session.return_value.ws_connect = AsyncMock(side_effect=TimeoutError())
         result = await _init_flow(hass)
         result = await _pick_local(hass, result["flow_id"])
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {CONF_LOCAL_HOST: MOCK_HOST, CONF_LOCAL_PORT: DEFAULT_LOCAL_PORT},
+            {CONF_LOCAL_HOST: MOCK_HOST},
         )
 
     assert result["type"] == FlowResultType.FORM
