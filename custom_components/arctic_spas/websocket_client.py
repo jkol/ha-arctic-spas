@@ -475,7 +475,7 @@ def resolve_ws_capabilities(
         yess=bool(settings.get("cfgYESS", False)),
         fogger=bool(settings.get("cfgFG", False)),
         spaboy=bool(settings.get("cfgSB", False)),
-        has_power_sensor="current_adc" in state or "power_w" in state,
+        has_power_sensor=True,
         has_exhaust=bool(settings.get("cfgEx", False)),
         has_economy=True,
         has_heater_outlet_temp=True,
