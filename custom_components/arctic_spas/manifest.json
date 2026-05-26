@@ -5,7 +5,7 @@
   "config_flow": true,
   "documentation": "https://github.com/jkol/ha-arctic-spas",
   "integration_type": "device",
-  "iot_class": "cloud_polling",
+  "iot_class": "local_push",
   "issue_tracker": "https://github.com/jkol/ha-arctic-spas/issues",
   "homeassistant": "2024.1.0",
   "requirements": ["paho-mqtt>=1.6.1"],
