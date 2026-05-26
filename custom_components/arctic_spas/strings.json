@@ -32,6 +32,28 @@
         "data": {
           "local_host": "Spa IP Address"
         }
+      },
+      "reconfigure_local": {
+        "title": "Update Spa IP Address",
+        "description": "Enter the spa's new local IP address. A DHCP reservation is recommended to prevent future changes.",
+        "data": {
+          "local_host": "Spa IP Address"
+        }
+      },
+      "reconfigure_rest": {
+        "title": "Update API Key",
+        "description": "Enter your new My Arctic Spa API key. Generate one at [{api_key_url}]({api_key_url})",
+        "data": {
+          "api_key": "API Key"
+        }
+      },
+      "reconfigure_mqtt": {
+        "title": "Update MQTT Credentials",
+        "description": "Enter your updated My Arctic Spa app credentials.",
+        "data": {
+          "mqtt_username": "Username",
+          "mqtt_password": "Password"
+        }
       }
     },
     "error": {

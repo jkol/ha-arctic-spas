@@ -13,8 +13,7 @@ CONF_MODE = "mode"
 CONF_MQTT_USERNAME = "mqtt_username"
 CONF_MQTT_PASSWORD = "mqtt_password"
 CONF_LOCAL_HOST = "local_host"
-CONF_LOCAL_PORT = "local_port"
-DEFAULT_LOCAL_PORT = 12121
+CONF_LOCAL_MAC = "local_mac"
 
 
 class ConnectionMode(StrEnum):

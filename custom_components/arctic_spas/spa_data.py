@@ -59,32 +59,7 @@ MQTT_KEY_MAP: dict[str, str] = {
     "currentADC"    : "current_adc",
 }
 
-# ── Local proto field number → canonical key mapping ─────────────────────────
-# Maps spa_live protobuf field numbers to canonical dict keys.
-LOCAL_FIELD_MAP: dict[int, str] = {
-    1  : "temperatureF",
-    2  : "setpointF",
-    3  : "pump1",
-    4  : "pump2",
-    5  : "pump3",
-    6  : "pump4",
-    7  : "pump5",
-    8  : "blower1",
-    9  : "blower2",
-    10 : "lights",
-    12 : "heater1_state",
-    13 : "heater2_state",
-    14 : "filter_status",
-    17 : "exhaust",            # exhaust_fan in proto
-    20 : "heater_outlet_temp_f",
-    22 : "economy",
-    23 : "current_adc",
-    24 : "easymode",
-    # Derived: power_w = current_adc * POWER_CALIBRATION
-    #          filter_on = filter_status != 0
-}
-
-# Filter status int → string enum (matches local_api.py and REST API values)
+# Filter status int → string enum
 _FILTER_STATUS_MAP: dict[int, str] = {
     0: "idle",
     1: "purge",
@@ -506,65 +481,6 @@ def normalise_mqtt_settings_spa(payload: dict[str, Any], existing: dict[str, Any
     return existing
 
 
-def normalise_local(proto_fields: dict[int, Any]) -> dict[str, Any]:
-    """Translate a parsed protobuf field map (field_number → value) to canonical dict.
-
-    Input is the raw integer field map from _decode_proto_varint_fields(). All
-    type conversions (pump int→string, filter_status int→string, etc.) are applied
-    here so local_api.py doesn't need to do them separately.
-
-    Sets connected=True and errors=[] since receiving a spa_live frame implies
-    connectivity and the local protocol has no error codes in spa_live frames.
-    """
-    result: dict[str, Any] = {
-        "connected": True,
-        "errors": [],
-        "data_timestamp": time.monotonic(),
-    }
-
-    for field_num, canonical_key in LOCAL_FIELD_MAP.items():
-        if field_num not in proto_fields:
-            continue
-
-        value = proto_fields[field_num]
-
-        # Pump fields (3-7 = pump1-5): int → string
-        if canonical_key in ("pump1", "pump2", "pump3", "pump4", "pump5"):
-            if isinstance(value, int):
-                value = _PUMP_STATUS_MAP.get(value, "off")
-
-        # Filter status (field 14): int → string enum
-        elif canonical_key == "filter_status":
-            if isinstance(value, int):
-                value = _FILTER_STATUS_MAP.get(value, "idle")
-
-        # Heater states (fields 12, 13): int → string
-        elif canonical_key in ("heater1_state", "heater2_state"):
-            if isinstance(value, int):
-                value = _HEATER_STATUS_MAP.get(value, "idle")
-
-        # Boolean fields: ensure Python bool
-        elif canonical_key in ("lights", "easymode", "economy", "exhaust"):
-            value = bool(value)
-
-        # Blower fields (8, 9): non-zero = on; normalise to int (0 or 1)
-        elif canonical_key in ("blower1", "blower2"):
-            value = int(bool(value))
-
-        result[canonical_key] = value
-
-    # Derived: filter_on
-    if "filter_status" in result:
-        result["filter_on"] = result["filter_status"] != "idle"
-
-    # Derived: power_w from current_adc
-    if "current_adc" in result:
-        adc = result["current_adc"]
-        if isinstance(adc, (int, float)):
-            result["power_w"] = round(adc * POWER_CALIBRATION)
-
-    return result
-
 
 # ── Capability detection ──────────────────────────────────────────────────────
 
@@ -720,41 +636,3 @@ def resolve_mqtt_capabilities(
     )
 
 
-def resolve_local_capabilities(
-    first_spa_live_fields: dict[int, int],
-    has_spaboy: bool = False,
-) -> SpaCapabilities:
-    """Resolve capabilities from the raw protobuf field numbers of the first spa_live frame.
-
-    A feature is considered present when its field number appears in the decoded
-    protobuf dict — the spa omits fields for hardware that is not installed.
-
-    LOCAL_FIELD_MAP field numbers used here:
-      4=pump2, 5=pump3, 6=pump4, 7=pump5
-      8=blower1, 9=blower2
-      12=heater1_state, 17=exhaust, 20=heater_outlet_temp_f, 22=economy, 23=current_adc
-
-    sds/yess/fogger are not detectable from spa_live; they default to False until
-    0x0002 spa_configuration field numbers are confirmed via live testing.
-    """
-    return SpaCapabilities(
-        pump2=4 in first_spa_live_fields,
-        pump3=5 in first_spa_live_fields,
-        pump4=6 in first_spa_live_fields,
-        pump5=7 in first_spa_live_fields,
-        blower1=8 in first_spa_live_fields,
-        blower2=9 in first_spa_live_fields,
-        sds=False,
-        yess=False,
-        fogger=False,
-        spaboy=has_spaboy,
-        has_power_sensor=23 in first_spa_live_fields,
-        has_exhaust=17 in first_spa_live_fields,
-        has_economy=22 in first_spa_live_fields,
-        has_heater_outlet_temp=20 in first_spa_live_fields,
-        has_heater_states=12 in first_spa_live_fields,
-        has_filter_data=False,
-        has_filter_schedule=False,
-        has_spaboy_boost=has_spaboy,
-        has_errors=False,
-    )

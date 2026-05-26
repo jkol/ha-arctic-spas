@@ -15,12 +15,11 @@ from .api import ArcticSpaApiError, ArcticSpaClient
 from .const import (
     CONF_API_KEY,
     CONF_LOCAL_HOST,
+    CONF_LOCAL_MAC,
     CONF_MODE,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_USERNAME,
     ConnectionMode,
-    DEFAULT_LOCAL_PORT,
-    CONF_LOCAL_PORT,
     DOMAIN,
 )
 from .coordinator import ArcticSpaCoordinator
@@ -74,7 +73,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         new_data = {
             CONF_MODE: ConnectionMode.LOCAL,
             CONF_LOCAL_HOST: host,
-            CONF_LOCAL_PORT: DEFAULT_LOCAL_PORT,
         }
     else:
         # v1 cloud/REST entry — keep api_key, remove old connection_mode key
@@ -129,7 +127,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         from .websocket_client import ArcticSpaWebSocketClient, resolve_ws_capabilities  # noqa: PLC0415
 
         host = entry.data[CONF_LOCAL_HOST]
-        client = ArcticSpaWebSocketClient(host)
+        mac = entry.data.get(CONF_LOCAL_MAC)
+
+        def _on_host_changed(new_host: str) -> None:
+            hass.config_entries.async_update_entry(
+                entry,
+                data={**entry.data, CONF_LOCAL_HOST: new_host},
+            )
+            _LOGGER.info("Persisted new spa IP %s to config entry", new_host)
+
+        client = ArcticSpaWebSocketClient(
+            host, mac=mac, on_host_changed=_on_host_changed,
+        )
         coordinator = ArcticSpaCoordinator(hass, client, push_mode=True)
 
         def _on_local_update(data: dict[str, Any]) -> None:

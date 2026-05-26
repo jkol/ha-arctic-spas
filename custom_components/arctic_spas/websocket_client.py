@@ -17,7 +17,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import sys
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 import aiohttp
@@ -29,6 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 
 _WS_PORT = 8765
 _RECONNECT_DELAYS = (5, 10, 30, 60, 120)
+_MAC_RECOVERY_THRESHOLD = 3  # consecutive failures before trying MAC-based IP recovery
 
 # Map WebSocket "live" topic keys to canonical state dict keys.
 _LIVE_KEY_MAP: dict[str, str] = {
@@ -84,6 +88,85 @@ _ERROR_LABELS: dict[int, str] = {
     14: "ORP Not Responding To Production",
     15: "PH Too Low (<6.5)",
 }
+
+
+_MAC_RE = re.compile(r"([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}")
+
+
+def _normalise_mac(mac: str) -> str:
+    """Normalise a MAC address to lowercase colon-separated form."""
+    return mac.replace("-", ":").lower()
+
+
+async def async_resolve_mac(host: str) -> str | None:
+    """Look up the MAC address for a given IP from the OS ARP/neighbor table."""
+    # Linux (HAOS): read /proc/net/arp directly — no subprocess needed
+    proc_arp = Path("/proc/net/arp")
+    if proc_arp.exists():
+        try:
+            text = await asyncio.get_event_loop().run_in_executor(
+                None, proc_arp.read_text
+            )
+            for line in text.splitlines()[1:]:  # skip header
+                parts = line.split()
+                if len(parts) >= 4 and parts[0] == host and parts[3] != "00:00:00:00:00:00":
+                    return _normalise_mac(parts[3])
+        except OSError:
+            pass
+
+    # Fallback: parse `arp -a` output (Windows, macOS, other Linux)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "arp", "-a", host,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        text = stdout.decode(errors="replace")
+        match = _MAC_RE.search(text)
+        if match:
+            return _normalise_mac(match.group())
+    except (OSError, asyncio.TimeoutError):
+        pass
+
+    return None
+
+
+async def async_resolve_ip_for_mac(mac: str) -> str | None:
+    """Scan the OS ARP/neighbor table for an IP matching the given MAC."""
+    target = _normalise_mac(mac)
+
+    proc_arp = Path("/proc/net/arp")
+    if proc_arp.exists():
+        try:
+            text = await asyncio.get_event_loop().run_in_executor(
+                None, proc_arp.read_text
+            )
+            for line in text.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 4 and _normalise_mac(parts[3]) == target:
+                    return parts[0]
+        except OSError:
+            pass
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "arp", "-a",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        for line in stdout.decode(errors="replace").splitlines():
+            mac_match = _MAC_RE.search(line)
+            if mac_match and _normalise_mac(mac_match.group()) == target:
+                # Extract IP — formats: "? (1.2.3.4) at aa:bb:..." or "1.2.3.4  aa-bb-..."
+                ip_match = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", line)
+                if ip_match:
+                    return ip_match.group(1)
+    except (OSError, asyncio.TimeoutError):
+        pass
+
+    return None
 
 
 def _normalise_ws_live(payload: dict[str, Any]) -> dict[str, Any]:
@@ -180,8 +263,15 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
     WebSocket connection.
     """
 
-    def __init__(self, host: str) -> None:
+    def __init__(
+        self,
+        host: str,
+        mac: str | None = None,
+        on_host_changed: Callable[[str], None] | None = None,
+    ) -> None:
         self._host = host
+        self._mac = _normalise_mac(mac) if mac else None
+        self._on_host_changed = on_host_changed
         self._state: dict[str, Any] = {}
         self._settings: dict[str, Any] = {}
         self._config: dict[str, Any] = {}
@@ -385,6 +475,45 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
                 _LOGGER.info("WebSocket: reconnected to %s:%d", self._host, _WS_PORT)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("WebSocket: reconnect failed: %s", err)
+
+                if (
+                    self._mac
+                    and self._reconnect_attempt >= _MAC_RECOVERY_THRESHOLD
+                    and self._reconnect_attempt % _MAC_RECOVERY_THRESHOLD == 0
+                ):
+                    await self._try_mac_recovery()
+
+    async def _try_mac_recovery(self) -> None:
+        """Attempt to find the spa's new IP via its MAC address in the ARP table."""
+        _LOGGER.info(
+            "WebSocket: attempting MAC-based IP recovery for %s", self._mac,
+        )
+        new_ip = await async_resolve_ip_for_mac(self._mac)
+        if not new_ip or new_ip == self._host:
+            _LOGGER.debug(
+                "WebSocket: MAC recovery found no new IP (got %s, current %s)",
+                new_ip, self._host,
+            )
+            return
+
+        _LOGGER.info(
+            "WebSocket: MAC %s resolved to new IP %s (was %s) — switching",
+            self._mac, new_ip, self._host,
+        )
+        old_host = self._host
+        self._host = new_ip
+        try:
+            await self._connect()
+            self._reconnect_attempt = 0
+            _LOGGER.info("WebSocket: reconnected to %s:%d after IP change", self._host, _WS_PORT)
+            if self._on_host_changed:
+                self._on_host_changed(new_ip)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning(
+                "WebSocket: new IP %s also failed (%s) — reverting to %s",
+                new_ip, err, old_host,
+            )
+            self._host = old_host
 
     async def _reader_loop(self) -> None:
         assert self._ws is not None

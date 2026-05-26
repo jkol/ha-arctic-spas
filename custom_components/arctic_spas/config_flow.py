@@ -18,6 +18,7 @@ from .api import ArcticSpaApiError, ArcticSpaAuthError, ArcticSpaClient
 from .const import (
     CONF_API_KEY,
     CONF_LOCAL_HOST,
+    CONF_LOCAL_MAC,
     CONF_MODE,
     CONF_MQTT_PASSWORD,
     CONF_MQTT_USERNAME,
@@ -173,37 +174,27 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             host = user_input[CONF_LOCAL_HOST].strip()
 
-            try:
-                session = async_get_clientsession(self.hass)
-                ws = await asyncio.wait_for(
-                    session.ws_connect(
-                        f"ws://{host}:8765",
-                        origin=f"http://{host}",
-                    ),
-                    timeout=_TCP_CONNECT_TIMEOUT,
-                )
-                await ws.send_json({"query": 0})
-                msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
-                await ws.close()
-                if msg.type != aiohttp.WSMsgType.TEXT:
-                    errors["base"] = "cannot_connect"
-            except (TimeoutError, asyncio.TimeoutError, OSError):
-                errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception("Unexpected error during local WebSocket validation")
-                errors["base"] = "unknown"
+            error = await self._validate_ws(host)
+            if error:
+                errors["base"] = error
 
             if not errors:
                 unique_id = f"{host}:8765"
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
+                mac = await self._resolve_mac(host)
+
+                entry_data: dict[str, Any] = {
+                    CONF_MODE: ConnectionMode.LOCAL,
+                    CONF_LOCAL_HOST: host,
+                }
+                if mac:
+                    entry_data[CONF_LOCAL_MAC] = mac
+
                 return self.async_create_entry(
                     title="Arctic Spa (Local)",
-                    data={
-                        CONF_MODE: ConnectionMode.LOCAL,
-                        CONF_LOCAL_HOST: host,
-                    },
+                    data=entry_data,
                 )
 
         return self.async_show_form(
@@ -284,6 +275,183 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
 
         spa_name: str = spas[0].get("Name") or spas[0].get("name") or ""
         return str(spa_id), spa_name
+
+    async def _validate_ws(self, host: str) -> str | None:
+        """Validate a WebSocket connection to the spa. Returns error key or None."""
+        try:
+            session = async_get_clientsession(self.hass)
+            ws = await asyncio.wait_for(
+                session.ws_connect(
+                    f"ws://{host}:8765",
+                    origin=f"http://{host}",
+                ),
+                timeout=_TCP_CONNECT_TIMEOUT,
+            )
+            await ws.send_json({"query": 0})
+            msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
+            await ws.close()
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                return "cannot_connect"
+        except (TimeoutError, asyncio.TimeoutError, OSError):
+            return "cannot_connect"
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Unexpected error during local WebSocket validation")
+            return "unknown"
+        return None
+
+    async def _resolve_mac(self, host: str) -> str | None:
+        """Best-effort MAC lookup for a host — returns None on failure."""
+        from .websocket_client import async_resolve_mac  # noqa: PLC0415
+
+        try:
+            mac = await async_resolve_mac(host)
+        except Exception:  # noqa: BLE001
+            mac = None
+        if mac:
+            _LOGGER.debug("Resolved MAC %s for %s", mac, host)
+        else:
+            _LOGGER.debug("Could not resolve MAC for %s — auto-recovery disabled", host)
+        return mac
+
+    # ── Reconfigure flow ────────────────────────────────────────────────────
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Dispatch reconfigure to the appropriate mode-specific step."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        assert entry is not None
+        mode = entry.data.get(CONF_MODE, ConnectionMode.REST)
+
+        if mode == ConnectionMode.LOCAL:
+            return await self.async_step_reconfigure_local(user_input)
+        if mode == ConnectionMode.MQTT:
+            return await self.async_step_reconfigure_mqtt(user_input)
+        return await self.async_step_reconfigure_rest(user_input)
+
+    async def async_step_reconfigure_local(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reconfigure local mode — update the spa's IP address."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        assert entry is not None
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            host = user_input[CONF_LOCAL_HOST].strip()
+
+            error = await self._validate_ws(host)
+            if error:
+                errors["base"] = error
+            else:
+                mac = await self._resolve_mac(host)
+                new_data: dict[str, Any] = {
+                    **entry.data,
+                    CONF_LOCAL_HOST: host,
+                }
+                if mac:
+                    new_data[CONF_LOCAL_MAC] = mac
+
+                return self.async_update_reload_and_abort(
+                    entry, data=new_data,
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure_local",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_LOCAL_HOST,
+                        default=entry.data.get(CONF_LOCAL_HOST, ""),
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure_rest(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reconfigure REST mode — update the API key."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        assert entry is not None
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            api_key = user_input[CONF_API_KEY].strip()
+            session = async_get_clientsession(self.hass)
+            client = ArcticSpaClient(api_key, session)
+
+            try:
+                await client.get_status()
+            except ArcticSpaAuthError:
+                errors[CONF_API_KEY] = "invalid_auth"
+            except ArcticSpaApiError:
+                errors["base"] = "cannot_connect"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected error during REST reconfigure")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={**entry.data, CONF_API_KEY: api_key},
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure_rest",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_API_KEY, default=entry.data.get(CONF_API_KEY, "")): str}
+            ),
+            errors=errors,
+            description_placeholders={
+                "api_key_url": "https://myarcticspa.com/spa/SpaAPIManagement.aspx"
+            },
+        )
+
+    async def async_step_reconfigure_mqtt(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reconfigure MQTT mode — update credentials."""
+        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        assert entry is not None
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            username = user_input[CONF_MQTT_USERNAME].strip()
+            password = user_input[CONF_MQTT_PASSWORD].strip()
+
+            try:
+                await self._validate_mqtt_credentials(username, password)
+            except _MqttAuthError:
+                errors["base"] = "invalid_auth"
+            except _MqttConnectError:
+                errors["base"] = "cannot_connect"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected error during MQTT reconfigure")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data={
+                        **entry.data,
+                        CONF_MQTT_USERNAME: username,
+                        CONF_MQTT_PASSWORD: password,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure_mqtt",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_MQTT_USERNAME,
+                        default=entry.data.get(CONF_MQTT_USERNAME, ""),
+                    ): str,
+                    vol.Required(CONF_MQTT_PASSWORD): str,
+                }
+            ),
+            errors=errors,
+        )
 
 
 class _MqttAuthError(Exception):
