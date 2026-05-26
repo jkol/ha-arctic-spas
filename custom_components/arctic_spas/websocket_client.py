@@ -612,8 +612,10 @@ def resolve_ws_capabilities(
         has_filter_data=True,
         has_filter_schedule=True,
         has_filter_details=False,
-        has_filter_suspension=True,
+        has_filter_suspension=False,  # WS live topic has no filter_suspension state feedback
+        has_spaboy_diagnostics=False,  # WS live only provides pH/ORP, not electrode data
         has_spaboy_boost=bool(settings.get("cfgSB", False)),
+        has_easymode=False,  # WS protocol has no easymode toggle command
         has_errors=True,
         has_network_info=False,
         has_rfid=bool(settings.get("cfgRFID", False)),

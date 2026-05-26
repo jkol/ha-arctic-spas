@@ -33,7 +33,7 @@ async def async_setup_entry(
         entities.append(ArcticSpaExhaustSensor(coordinator, entry))
     if caps.has_economy:
         entities.append(ArcticSpaEconomySensor(coordinator, entry))
-    if caps.spaboy:
+    if caps.has_spaboy_diagnostics:
         entities.append(ArcticSpaOnzenSanitizingSensor(coordinator, entry))
         entities.append(ArcticSpaOnzenPumpSensor(coordinator, entry))
     if caps.has_rfid:

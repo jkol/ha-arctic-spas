@@ -87,7 +87,7 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="%",
         icon="mdi:battery",
-        capabilities_check=lambda caps: caps.spaboy,
+        capabilities_check=lambda caps: caps.has_spaboy_diagnostics,
     ),
     ArcticSpaSensorDescription(
         key="electrode_wear_status",
@@ -95,7 +95,7 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENUM,
         options=["good", "ok", "fair", "low", "critical"],
         icon="mdi:battery-alert",
-        capabilities_check=lambda caps: caps.spaboy,
+        capabilities_check=lambda caps: caps.has_spaboy_diagnostics,
     ),
     ArcticSpaSensorDescription(
         key="electrode_mah",
@@ -104,7 +104,7 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         native_unit_of_measurement="mAh",
         icon="mdi:battery-charging",
         entity_category=EntityCategory.DIAGNOSTIC,
-        capabilities_check=lambda caps: caps.spaboy,
+        capabilities_check=lambda caps: caps.has_spaboy_diagnostics,
     ),
     ArcticSpaSensorDescription(
         key="electrode_current",
@@ -112,7 +112,7 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:current-ac",
         entity_category=EntityCategory.DIAGNOSTIC,
-        capabilities_check=lambda caps: caps.spaboy,
+        capabilities_check=lambda caps: caps.has_spaboy_diagnostics,
     ),
     ArcticSpaSensorDescription(
         key="electrode_voltage",
@@ -120,7 +120,7 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:sine-wave",
         entity_category=EntityCategory.DIAGNOSTIC,
-        capabilities_check=lambda caps: caps.spaboy,
+        capabilities_check=lambda caps: caps.has_spaboy_diagnostics,
     ),
     ArcticSpaSensorDescription(
         key="electrode_current_setpoint",
@@ -129,7 +129,7 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         native_unit_of_measurement="µA",
         icon="mdi:target",
         entity_category=EntityCategory.DIAGNOSTIC,
-        capabilities_check=lambda caps: caps.spaboy,
+        capabilities_check=lambda caps: caps.has_spaboy_diagnostics,
     ),
     ArcticSpaSensorDescription(
         key="electrode_state",
@@ -137,7 +137,7 @@ SENSORS: tuple[ArcticSpaSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:state-machine",
         entity_category=EntityCategory.DIAGNOSTIC,
-        capabilities_check=lambda caps: caps.spaboy,
+        capabilities_check=lambda caps: caps.has_spaboy_diagnostics,
     ),
     ArcticSpaSensorDescription(
         key="filter_status",

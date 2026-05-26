@@ -26,8 +26,9 @@ async def async_setup_entry(
     caps = coordinator.capabilities
     entities: list[ButtonEntity] = [
         ArcticSpaFiltrationBoostButton(coordinator, entry),
-        ArcticSpaEasyModeButton(coordinator, entry),
     ]
+    if caps.has_easymode:
+        entities.append(ArcticSpaEasyModeButton(coordinator, entry))
     if caps.has_spaboy_boost:
         entities.append(ArcticSpaSpaBoyBoostButton(coordinator, entry))
     async_add_entities(entities)

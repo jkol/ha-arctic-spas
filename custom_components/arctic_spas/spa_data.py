@@ -521,8 +521,13 @@ class SpaCapabilities:
     has_filter_details: bool = False
     # Filter suspension toggle ("stop filtering 3°F above setpoint")
     has_filter_suspension: bool = False
-    # SpaBoy chlorine boost button (local mode + SpaBoy hardware only)
+    # SpaBoy diagnostic sensors (electrode wear/current/voltage, onzen pump/sanitizing)
+    # Only MQTT provides these via telemetry/spaboy; WS live topic only has pH/ORP.
+    has_spaboy_diagnostics: bool = False
+    # SpaBoy chlorine boost button
     has_spaboy_boost: bool = False
+    # Easy mode command support (REST + MQTT only; WS protocol has no easymode toggle)
+    has_easymode: bool = True
     # Error reporting: REST + MQTT; Local protocol has no error codes
     has_errors: bool = True
     # Network info sensors (MQTT only, from information/network)
@@ -625,6 +630,7 @@ def resolve_mqtt_capabilities(
         has_filter_schedule=True,  # spaSettings wrapper supports filtrationFrequency/Duration
         has_filter_details=True,   # per-filter serial/install date from telemetry/filters
         has_filter_suspension=True,  # spaSettings wrapper supports filterSuspension
+        has_spaboy_diagnostics=bool(config.get("spaboy", 0)),  # electrode data from telemetry/spaboy
         has_spaboy_boost=bool(config.get("spaboy", 0)),  # SpaBoy boost via spaboySettings in MQTT
         has_errors=True,
         has_network_info=True,   # information/network always fires on MQTT connect
