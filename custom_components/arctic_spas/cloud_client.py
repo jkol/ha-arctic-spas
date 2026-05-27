@@ -426,11 +426,30 @@ async def async_dealer_login(email: str, password: str) -> str:
 
 
 async def async_get_spas(token: str) -> list[dict[str, Any]]:
-    """Fetch the list of spas associated with the authenticated user."""
+    """Fetch the list of spas associated with the authenticated user.
+
+    Uses /api/user → get user ID → /api/user/{uid}/spas since /api/spas
+    is restricted to dealer/admin roles.
+    """
     async with aiohttp.ClientSession() as session:
+        headers = {"Authorization": f"Bearer {token}"}
+
         async with session.get(
-            f"{_DEALER_API_BASE}/spas",
-            headers={"Authorization": f"Bearer {token}"},
+            f"{_DEALER_API_BASE}/user",
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                raise ArcticSpaApiError(f"Failed to fetch user: status {resp.status}")
+            user_body = await resp.json()
+
+        uid = user_body.get("data", {}).get("id")
+        if not uid:
+            raise ArcticSpaApiError("No user ID in /api/user response")
+
+        async with session.get(
+            f"{_DEALER_API_BASE}/user/{uid}/spas",
+            headers=headers,
             timeout=aiohttp.ClientTimeout(total=15),
         ) as resp:
             if resp.status != 200:
