@@ -37,6 +37,8 @@ _LOGGER = logging.getLogger(__name__)
 _WS_PORT = 8765
 _RECONNECT_DELAYS = (5, 10, 30, 60, 120)
 _MAC_RECOVERY_THRESHOLD = 3
+_WS_HEARTBEAT = 30.0   # WebSocket ping interval (catches dead TCP connections)
+_RECEIVE_TIMEOUT = 90.0  # No message for this long → force reconnect
 
 
 _MAC_RE = re.compile(r"([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}")
@@ -280,6 +282,7 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
                 self._session.ws_connect(
                     f"ws://{self._host}:{_WS_PORT}",
                     origin=f"http://{self._host}",
+                    heartbeat=_WS_HEARTBEAT,
                 ),
                 timeout=10.0,
             )
@@ -378,16 +381,29 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
 
     async def _reader_loop(self) -> None:
         assert self._ws is not None
-        async for msg in self._ws:
+        while not self._ws.closed:
+            try:
+                msg = await asyncio.wait_for(self._ws.receive(), timeout=_RECEIVE_TIMEOUT)
+            except asyncio.TimeoutError:
+                _LOGGER.warning(
+                    "WebSocket: no message received for %.0fs — forcing reconnect",
+                    _RECEIVE_TIMEOUT,
+                )
+                return
+            except asyncio.CancelledError:
+                raise
+
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
                 except (ValueError, TypeError):
                     continue
-
                 self._dispatch(data)
-
-            elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+            elif msg.type in (
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.ERROR,
+            ):
                 break
 
     def _dispatch(self, data: dict[str, Any]) -> None:
