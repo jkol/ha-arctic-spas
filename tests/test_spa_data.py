@@ -85,9 +85,11 @@ def test_normalise_native_live_connected_always_true(native_live_payload):
     assert result["connected"] is True
 
 
-def test_normalise_native_live_errors_default_empty(native_live_payload):
+def test_normalise_native_live_does_not_set_errors(native_live_payload):
+    # errors must only be set by normalise_native_error, not the live normaliser —
+    # otherwise every 500ms live update wipes active error codes
     result = normalise_native_live(native_live_payload)
-    assert result["errors"] == []
+    assert "errors" not in result
 
 
 def test_normalise_native_live_spaboy_inline():

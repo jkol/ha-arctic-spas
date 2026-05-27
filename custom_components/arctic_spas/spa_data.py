@@ -87,7 +87,6 @@ def normalise_native_live(payload: dict[str, Any]) -> dict[str, Any]:
     """
     result: dict[str, Any] = {
         "connected": True,
-        "errors": [],
         "data_timestamp": time.monotonic(),
     }
 
