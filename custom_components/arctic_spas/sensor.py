@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfElectricCurrent, UnitOfEnergy, UnitOfPower, UnitOfTemperature, UnitOfTime
+from homeassistant.const import UnitOfEnergy, UnitOfPower, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -268,7 +268,7 @@ class ArcticSpaSensor(CoordinatorEntity[ArcticSpaCoordinator], SensorEntity):
 
     @property
     def native_value(self) -> Any:
-        value = self.coordinator.data.get(self.entity_description.key)
+        value = (self.coordinator.data or {}).get(self.entity_description.key)
         if self.entity_description.key == "errors":
             return ", ".join(value) if value else "none"
         return value

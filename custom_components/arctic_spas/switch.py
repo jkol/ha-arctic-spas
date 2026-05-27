@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import ArcticSpaApiError, ArcticSpaClient
+from .api import ArcticSpaApiError, ArcticSpaClientBaseBase
 from .const import DOMAIN
 from .coordinator import ArcticSpaCoordinator
 from .entity_base import device_info
@@ -21,35 +21,35 @@ from .spa_data import SpaCapabilities
 _LOGGER = logging.getLogger(__name__)
 
 # Module-level command helpers — used instead of lambdas so these are picklable.
-def _lights_on(c: ArcticSpaClient) -> Any: return c.set_lights(True)
-def _lights_off(c: ArcticSpaClient) -> Any: return c.set_lights(False)
-def _filter_suspension_on(c: ArcticSpaClient) -> Any: return c.set_filter(suspension=True)
-def _filter_suspension_off(c: ArcticSpaClient) -> Any: return c.set_filter(suspension=False)
-def _sds_on(c: ArcticSpaClient) -> Any: return c.set_sds(True)
-def _sds_off(c: ArcticSpaClient) -> Any: return c.set_sds(False)
-def _yess_on(c: ArcticSpaClient) -> Any: return c.set_yess(True)
-def _yess_off(c: ArcticSpaClient) -> Any: return c.set_yess(False)
-def _fogger_on(c: ArcticSpaClient) -> Any: return c.set_fogger(True)
-def _fogger_off(c: ArcticSpaClient) -> Any: return c.set_fogger(False)
-def _blower1_on(c: ArcticSpaClient) -> Any: return c.set_blower("1", True)
-def _blower1_off(c: ArcticSpaClient) -> Any: return c.set_blower("1", False)
-def _blower2_on(c: ArcticSpaClient) -> Any: return c.set_blower("2", True)
-def _blower2_off(c: ArcticSpaClient) -> Any: return c.set_blower("2", False)
-def _pump2_on(c: ArcticSpaClient) -> Any: return c.set_pump("2", "high")
-def _pump2_off(c: ArcticSpaClient) -> Any: return c.set_pump("2", "off")
-def _pump3_on(c: ArcticSpaClient) -> Any: return c.set_pump("3", "high")
-def _pump3_off(c: ArcticSpaClient) -> Any: return c.set_pump("3", "off")
-def _pump4_on(c: ArcticSpaClient) -> Any: return c.set_pump("4", "high")
-def _pump4_off(c: ArcticSpaClient) -> Any: return c.set_pump("4", "off")
-def _pump5_on(c: ArcticSpaClient) -> Any: return c.set_pump("5", "high")
-def _pump5_off(c: ArcticSpaClient) -> Any: return c.set_pump("5", "off")
+def _lights_on(c: ArcticSpaClientBase) -> Any: return c.set_lights(True)
+def _lights_off(c: ArcticSpaClientBase) -> Any: return c.set_lights(False)
+def _filter_suspension_on(c: ArcticSpaClientBase) -> Any: return c.set_filter(suspension=True)
+def _filter_suspension_off(c: ArcticSpaClientBase) -> Any: return c.set_filter(suspension=False)
+def _sds_on(c: ArcticSpaClientBase) -> Any: return c.set_sds(True)
+def _sds_off(c: ArcticSpaClientBase) -> Any: return c.set_sds(False)
+def _yess_on(c: ArcticSpaClientBase) -> Any: return c.set_yess(True)
+def _yess_off(c: ArcticSpaClientBase) -> Any: return c.set_yess(False)
+def _fogger_on(c: ArcticSpaClientBase) -> Any: return c.set_fogger(True)
+def _fogger_off(c: ArcticSpaClientBase) -> Any: return c.set_fogger(False)
+def _blower1_on(c: ArcticSpaClientBase) -> Any: return c.set_blower("1", True)
+def _blower1_off(c: ArcticSpaClientBase) -> Any: return c.set_blower("1", False)
+def _blower2_on(c: ArcticSpaClientBase) -> Any: return c.set_blower("2", True)
+def _blower2_off(c: ArcticSpaClientBase) -> Any: return c.set_blower("2", False)
+def _pump2_on(c: ArcticSpaClientBase) -> Any: return c.set_pump("2", "high")
+def _pump2_off(c: ArcticSpaClientBase) -> Any: return c.set_pump("2", "off")
+def _pump3_on(c: ArcticSpaClientBase) -> Any: return c.set_pump("3", "high")
+def _pump3_off(c: ArcticSpaClientBase) -> Any: return c.set_pump("3", "off")
+def _pump4_on(c: ArcticSpaClientBase) -> Any: return c.set_pump("4", "high")
+def _pump4_off(c: ArcticSpaClientBase) -> Any: return c.set_pump("4", "off")
+def _pump5_on(c: ArcticSpaClientBase) -> Any: return c.set_pump("5", "high")
+def _pump5_off(c: ArcticSpaClientBase) -> Any: return c.set_pump("5", "off")
 
 
 @dataclass(frozen=True, kw_only=True)
 class ArcticSpaSwitchDescription(SwitchEntityDescription):
     status_key: str
-    turn_on: Callable[[ArcticSpaClient], Coroutine[Any, Any, Any]]
-    turn_off: Callable[[ArcticSpaClient], Coroutine[Any, Any, Any]]
+    turn_on: Callable[[ArcticSpaClientBase], Coroutine[Any, Any, Any]]
+    turn_off: Callable[[ArcticSpaClientBase], Coroutine[Any, Any, Any]]
     capabilities_check: Callable[[SpaCapabilities], bool] | None = None
     state_is_on: Callable[[Any], bool] | None = None
 
@@ -192,7 +192,7 @@ class ArcticSpaSwitch(CoordinatorEntity[ArcticSpaCoordinator], SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        value = self.coordinator.data.get(self.entity_description.status_key)
+        value = (self.coordinator.data or {}).get(self.entity_description.status_key)
         if value is None:
             return None
         if self.entity_description.state_is_on is not None:

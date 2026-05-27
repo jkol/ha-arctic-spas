@@ -79,6 +79,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_config_entry_first_refresh()
             await client.wait_for_config(timeout=5.0)
         except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
+            await client.stop()
             raise ConfigEntryNotReady(str(err)) from err
 
         coordinator.capabilities = resolve_native_capabilities(
@@ -109,6 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_config_entry_first_refresh()
             await client.wait_for_config(timeout=10.0)
         except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
+            await client.stop()
             raise ConfigEntryNotReady(str(err)) from err
 
         coordinator.capabilities = resolve_native_capabilities(

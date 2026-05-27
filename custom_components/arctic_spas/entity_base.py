@@ -16,7 +16,7 @@ def device_info(
     """Return a consistent device info dict for all Arctic Spa entities.
 
     Pass coordinator.capabilities to populate model and firmware version when
-    available (currently populated by MQTT mode via information/spa).
+    available (populated from the native 'sett' topic in both modes).
     """
     info: dict[str, Any] = {
         "identifiers": {(DOMAIN, entry.entry_id)},

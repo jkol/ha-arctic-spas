@@ -52,11 +52,11 @@ class ArcticSpaClimate(CoordinatorEntity[ArcticSpaCoordinator], ClimateEntity):
 
     @property
     def current_temperature(self) -> float | None:
-        return self.coordinator.data.get("temperatureF")
+        return (self.coordinator.data or {}).get("temperatureF")
 
     @property
     def target_temperature(self) -> float | None:
-        return self.coordinator.data.get("setpointF")
+        return (self.coordinator.data or {}).get("setpointF")
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = kwargs.get("temperature")

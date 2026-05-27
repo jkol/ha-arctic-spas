@@ -37,7 +37,6 @@ _MQTT_AUTHORIZER = "DealerPortalCustomAuthorizer_PROD"
 _MQTT_ENV = "prod"
 
 _RECONNECT_DELAYS = (5, 10, 30, 60, 120)
-_TOKEN_REFRESH_MARGIN = 300  # refresh 5 min before expiry
 
 
 class ArcticSpaCloudAuthError(ArcticSpaApiError):
@@ -72,6 +71,7 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
         self._mqtt_client: aiomqtt.Client | None = None
         self._running = False
         self._supervisor_task: asyncio.Task | None = None
+        self._reader_task: asyncio.Task | None = None
         self._reconnect_attempt: int = 0
         self._config_ready = asyncio.Event()
 
@@ -138,8 +138,7 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
         return {}
 
     async def set_easymode(self, on: bool) -> dict[str, Any]:
-        await self._publish_command({"Linext": 1})
-        _LOGGER.warning("Cloud: easymode toggle — using Linext as proxy")
+        _LOGGER.warning("Cloud: easymode toggle not available in this firmware")
         return {}
 
     async def activate_boost(self) -> dict[str, Any]:
@@ -231,7 +230,7 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
         self._running = True
         await self._login()
         await self._connect_mqtt()
-        self._supervisor_task = asyncio.ensure_future(self._supervisor_loop())
+        self._supervisor_task = asyncio.create_task(self._supervisor_loop())
 
     async def stop(self) -> None:
         self._running = False
@@ -241,7 +240,13 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
                 await self._supervisor_task
             except asyncio.CancelledError:
                 pass
-        self._mqtt_client = None
+        if self._reader_task and not self._reader_task.done():
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
+        await self._disconnect_mqtt()
 
     async def wait_for_config(self, timeout: float = 10.0) -> bool:
         try:
@@ -291,7 +296,7 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
             await self._mqtt_client.subscribe(topic, qos=0)
             _LOGGER.debug("Cloud: subscribed to %s", topic)
 
-        asyncio.ensure_future(self._reader_loop())
+        self._reader_task = asyncio.create_task(self._reader_loop())
         _LOGGER.info("Cloud: MQTT connected to %s", _MQTT_BROKER)
 
     async def _disconnect_mqtt(self) -> None:
@@ -313,6 +318,8 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
                 self._dispatch(topic_str, payload_str)
         except aiomqtt.MqttError as err:
             _LOGGER.warning("Cloud: MQTT reader error: %s", err)
+        finally:
+            await self._disconnect_mqtt()
 
     def _dispatch(self, topic: str, raw: str) -> None:
         parts = topic.split("/")

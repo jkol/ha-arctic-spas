@@ -87,7 +87,7 @@ class ArcticSpaNumber(CoordinatorEntity[ArcticSpaCoordinator], NumberEntity):
 
     @property
     def native_value(self) -> float | None:
-        value = self.coordinator.data.get(self.entity_description.key)
+        value = (self.coordinator.data or {}).get(self.entity_description.key)
         return float(value) if value is not None else None
 
     async def async_set_native_value(self, value: float) -> None:

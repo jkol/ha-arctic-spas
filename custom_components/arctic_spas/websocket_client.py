@@ -53,7 +53,7 @@ async def async_resolve_mac(host: str) -> str | None:
     proc_arp = Path("/proc/net/arp")
     if proc_arp.exists():
         try:
-            text = await asyncio.get_event_loop().run_in_executor(
+            text = await asyncio.get_running_loop().run_in_executor(
                 None, proc_arp.read_text
             )
             for line in text.splitlines()[1:]:  # skip header
@@ -88,7 +88,7 @@ async def async_resolve_ip_for_mac(mac: str) -> str | None:
     proc_arp = Path("/proc/net/arp")
     if proc_arp.exists():
         try:
-            text = await asyncio.get_event_loop().run_in_executor(
+            text = await asyncio.get_running_loop().run_in_executor(
                 None, proc_arp.read_text
             )
             for line in text.splitlines()[1:]:
@@ -168,28 +168,26 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
     async def get_status(self) -> dict[str, Any]:
         return self._state.copy()
 
-    def _send_command(self, payload: dict[str, Any]) -> None:
+    async def _send_command(self, payload: dict[str, Any]) -> None:
         if self._ws is None or self._ws.closed:
             raise ArcticSpaApiError("WebSocket not connected — cannot send command")
-        asyncio.ensure_future(self._ws.send_json(payload))
+        await self._ws.send_json(payload)
 
     async def set_temperature(self, setpoint_f: int) -> dict[str, Any]:
-        self._send_command({"setTSP": setpoint_f})
+        await self._send_command({"setTSP": setpoint_f})
         return {}
 
     async def set_lights(self, on: bool) -> dict[str, Any]:
-        # WebSocket protocol uses "cycle next" — Linext toggles lights
-        self._send_command({"Linext": 1})
+        await self._send_command({"Linext": 1})
         return {}
 
     async def set_pump(self, pump: str, state: str) -> dict[str, Any]:
-        # Cycle-next command for each pump
-        self._send_command({f"P{pump}next": 1})
+        await self._send_command({f"P{pump}next": 1})
         return {}
 
     async def set_blower(self, blower: str, on: bool) -> dict[str, Any]:
         key = f"Bl{blower}next" if blower == "1" else f"BL{blower}next"
-        self._send_command({key: 1})
+        await self._send_command({key: 1})
         return {}
 
     async def set_filter(
@@ -200,7 +198,7 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
         suspension: bool | None = None,
     ) -> dict[str, Any]:
         if state is not None:
-            self._send_command({"FLTRboost": 1})
+            await self._send_command({"FLTRboost": 1})
         settings: dict[str, Any] = {}
         if frequency is not None:
             settings["setFF"] = frequency
@@ -209,37 +207,35 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
         if suspension is not None:
             settings["setFS"] = suspension
         if settings:
-            self._send_command(settings)
+            await self._send_command(settings)
         return {}
 
     async def set_easymode(self, on: bool) -> dict[str, Any]:
-        # No direct easymode toggle in the WS command enum;
-        # the portal doesn't expose it either. Use P1next as fallback.
         _LOGGER.warning("WebSocket: easymode toggle not available in this firmware")
         return {}
 
     async def activate_boost(self) -> dict[str, Any]:
-        self._send_command({"FLTRboost": 1})
+        await self._send_command({"FLTRboost": 1})
         return {}
 
     async def activate_spaboy_boost(self) -> dict[str, Any]:
-        self._send_command({"SBboost": 1})
+        await self._send_command({"SBboost": 1})
         return {}
 
     async def set_spaboy_orp(self, orp_low: int, orp_high: int) -> dict[str, Any]:
-        self._send_command({"SBORPhi": orp_high, "SBORPlo": orp_low})
+        await self._send_command({"SBORPhi": orp_high, "SBORPlo": orp_low})
         return {}
 
     async def set_sds(self, on: bool) -> dict[str, Any]:
-        self._send_command({"SDSnext": 1})
+        await self._send_command({"SDSnext": 1})
         return {}
 
     async def set_yess(self, on: bool) -> dict[str, Any]:
-        self._send_command({"YESSnext": 1})
+        await self._send_command({"YESSnext": 1})
         return {}
 
     async def set_fogger(self, on: bool) -> dict[str, Any]:
-        self._send_command({"Fgnext": 1})
+        await self._send_command({"Fgnext": 1})
         return {}
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
@@ -248,7 +244,7 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
         self._on_update = on_update
         self._running = True
         await self._connect()
-        self._supervisor_task = asyncio.ensure_future(self._supervisor_loop())
+        self._supervisor_task = asyncio.create_task(self._supervisor_loop())
 
     async def wait_for_config(self, timeout: float = 5.0) -> bool:
         try:
@@ -295,7 +291,7 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
 
         # Send initial query to trigger full state dump
         await self._ws.send_json({"query": 0})
-        self._reader_task = asyncio.ensure_future(self._reader_loop())
+        self._reader_task = asyncio.create_task(self._reader_loop())
         _LOGGER.debug("WebSocket: connected to %s:%d", self._host, _WS_PORT)
 
     async def _close(self) -> None:

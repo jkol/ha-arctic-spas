@@ -52,15 +52,16 @@ class ArcticSpaPump1Select(CoordinatorEntity[ArcticSpaCoordinator], SelectEntity
     @property
     def available(self) -> bool:
         # Spa locks pump1 to high during filter boost — disallow changes
+        data = self.coordinator.data or {}
         return (
             super().available
-            and self.coordinator.data.get("connected", False)
-            and self.coordinator.data.get("filter_status") != "boost"
+            and data.get("connected", False)
+            and data.get("filter_status") != "boost"
         )
 
     @property
     def current_option(self) -> str | None:
-        value = self.coordinator.data.get("pump1")
+        value = (self.coordinator.data or {}).get("pump1")
         if isinstance(value, str) and value.lower() in PUMP1_STATES:
             return value.lower()
         return None
@@ -93,7 +94,7 @@ class ArcticSpaClRangeSelect(CoordinatorEntity[ArcticSpaCoordinator], SelectEnti
 
     @property
     def current_option(self) -> str | None:
-        orp_low = self.coordinator.data.get("spaboy_orp_low")
+        orp_low = (self.coordinator.data or {}).get("spaboy_orp_low")
         return _ORP_LOW_TO_LEVEL.get(orp_low)
 
     async def async_select_option(self, option: str) -> None:
