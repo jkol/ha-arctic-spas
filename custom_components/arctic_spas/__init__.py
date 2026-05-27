@@ -148,4 +148,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await client.stop()
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Error stopping client: %s", err)
+        if not domain_data:
+            hass.data.pop(DOMAIN, None)
     return unload_ok

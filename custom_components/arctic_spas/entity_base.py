@@ -5,7 +5,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 
-from .const import DOMAIN
+from .const import CONF_CLOUD_SPA_ID, CONF_LOCAL_HOST, CONF_LOCAL_MAC, DOMAIN
 from .spa_data import SpaCapabilities
 
 
@@ -13,16 +13,18 @@ def device_info(
     entry: ConfigEntry,
     capabilities: SpaCapabilities | None = None,
 ) -> dict[str, Any]:
-    """Return a consistent device info dict for all Arctic Spa entities.
-
-    Pass coordinator.capabilities to populate model and firmware version when
-    available (populated from the native 'sett' topic in both modes).
-    """
+    """Return a consistent device info dict for all Arctic Spa entities."""
+    stable_id = (
+        entry.data.get(CONF_CLOUD_SPA_ID)
+        or entry.data.get(CONF_LOCAL_MAC)
+        or entry.data.get(CONF_LOCAL_HOST)
+        or entry.entry_id
+    )
     info: dict[str, Any] = {
-        "identifiers": {(DOMAIN, entry.entry_id)},
-        "name": "Arctic Spas",
+        "identifiers": {(DOMAIN, stable_id)},
+        "name": entry.title or "Arctic Spa",
         "manufacturer": "Arctic Spas",
-        "configuration_url": "https://myarcticspa.com",
+        "configuration_url": "https://dealer.myarcticspa.com",
     }
     if capabilities is not None:
         if capabilities.model:

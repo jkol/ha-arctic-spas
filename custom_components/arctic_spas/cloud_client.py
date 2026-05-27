@@ -300,12 +300,13 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
         _LOGGER.info("Cloud: MQTT connected to %s", _MQTT_BROKER)
 
     async def _disconnect_mqtt(self) -> None:
-        if self._mqtt_client is not None:
+        client = self._mqtt_client
+        self._mqtt_client = None
+        if client is not None:
             try:
-                await self._mqtt_client.__aexit__(None, None, None)
+                await client.__aexit__(None, None, None)
             except Exception:  # noqa: BLE001
                 pass
-            self._mqtt_client = None
 
     async def _reader_loop(self) -> None:
         assert self._mqtt_client is not None
@@ -367,10 +368,15 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
                 data = json.loads(raw)
             except (ValueError, TypeError):
                 return
-            if data.get("connection_status") == "connected":
+            status = data.get("connection_status")
+            if status == "connected":
                 self._state["connected"] = True
-                if self._on_update:
-                    self._on_update(self._state.copy())
+            elif status == "disconnected":
+                self._state["connected"] = False
+            else:
+                return
+            if self._on_update:
+                self._on_update(self._state.copy())
 
         elif topic.startswith("$aws/events/presence/disconnected/"):
             self._state["connected"] = False

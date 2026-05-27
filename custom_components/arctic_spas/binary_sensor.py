@@ -92,12 +92,12 @@ class ArcticSpaErrorSensor(CoordinatorEntity[ArcticSpaCoordinator], BinarySensor
 
     @property
     def is_on(self) -> bool:
-        errors = self.coordinator.data.get("errors", [])
+        errors = (self.coordinator.data or {}).get("errors", [])
         return bool(errors)
 
     @property
     def extra_state_attributes(self) -> dict:
-        errors = self.coordinator.data.get("errors", [])
+        errors = (self.coordinator.data or {}).get("errors", [])
         return {"error_codes": ", ".join(errors) if errors else "none"}
 
 

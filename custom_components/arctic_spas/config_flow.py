@@ -306,11 +306,13 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
                 timeout=_WS_CONNECT_TIMEOUT,
             )
-            await ws.send_json({"query": 0})
-            msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
-            await ws.close()
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                return "cannot_connect"
+            try:
+                await ws.send_json({"query": 0})
+                msg = await asyncio.wait_for(ws.receive(), timeout=5.0)
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    return "cannot_connect"
+            finally:
+                await ws.close()
         except (TimeoutError, asyncio.TimeoutError, OSError):
             return "cannot_connect"
         except Exception:  # noqa: BLE001

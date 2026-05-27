@@ -310,13 +310,13 @@ class ArcticSpaEnergySensor(CoordinatorEntity[ArcticSpaCoordinator], RestoreSens
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        data_ts: float | None = self.coordinator.data.get("data_timestamp")
+        data = self.coordinator.data or {}
+        data_ts: float | None = data.get("data_timestamp")
         if data_ts is None or data_ts == self._last_update:
-            # No new primary status reading; skip integration.
             self.async_write_ha_state()
             return
         if self._last_update is not None:
-            power_w = self.coordinator.data.get("power_w")
+            power_w = data.get("power_w")
             if isinstance(power_w, (int, float)) and power_w >= 0:
                 elapsed_hours = (data_ts - self._last_update) / 3600.0
                 self._accumulated_kwh += (power_w / 1000.0) * elapsed_hours

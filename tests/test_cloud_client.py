@@ -259,13 +259,26 @@ def test_dispatch_connection_status_connected(client):
     assert len(updates) == 1
 
 
-def test_dispatch_connection_status_other_ignored(client):
+def test_dispatch_connection_status_disconnected(client):
     updates = []
     client._on_update = lambda d: updates.append(d)
 
     client._dispatch(
         "arcticspa/42/spa-uuid-123/connection-status",
         json.dumps({"connection_status": "disconnected"}),
+    )
+
+    assert client._state["connected"] is False
+    assert len(updates) == 1
+
+
+def test_dispatch_connection_status_unknown_ignored(client):
+    updates = []
+    client._on_update = lambda d: updates.append(d)
+
+    client._dispatch(
+        "arcticspa/42/spa-uuid-123/connection-status",
+        json.dumps({"connection_status": "unknown_value"}),
     )
 
     assert "connected" not in client._state

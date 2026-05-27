@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import ArcticSpaApiError, ArcticSpaClientBaseBase
+from .api import ArcticSpaApiError, ArcticSpaClientBase
 from .const import DOMAIN
 from .coordinator import ArcticSpaCoordinator
 from .entity_base import device_info
