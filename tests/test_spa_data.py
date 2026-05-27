@@ -1,36 +1,14 @@
-"""Tests for spa_data normalisation helpers."""
-import json
-from pathlib import Path
-
+"""Tests for spa_data native format normalisation helpers."""
 import pytest
 
 from custom_components.arctic_spas.spa_data import (
     POWER_CALIBRATION,
-    decode_error_bitmask,
-    normalise_mqtt_errors,
-    normalise_mqtt_filters,
-    normalise_mqtt_settings_spa,
-    normalise_mqtt_spa,
-    normalise_mqtt_spaboy,
+    SpaCapabilities,
+    normalise_native_error,
+    normalise_native_live,
+    normalise_native_sett,
+    resolve_native_capabilities,
 )
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-@pytest.fixture
-def mqtt_spa_payload():
-    return json.loads((FIXTURES / "mqtt_telemetry_spa.json").read_text())
-
-
-@pytest.fixture
-def mqtt_filters_payload():
-    return json.loads((FIXTURES / "mqtt_telemetry_filters.json").read_text())
-
-
-@pytest.fixture
-def mqtt_errors_payload():
-    return json.loads((FIXTURES / "mqtt_telemetry_errors.json").read_text())
-
 
 
 # ── POWER_CALIBRATION ─────────────────────────────────────────────────────────
@@ -40,418 +18,207 @@ def test_power_calibration_value():
     assert POWER_CALIBRATION == 1.87
 
 
-# ── normalise_mqtt_spa ────────────────────────────────────────────────────────
+# ── normalise_native_live ────────────────────────────────────────────────────
 
 
-def test_normalise_mqtt_spa_happy_path_all_canonical_keys(mqtt_spa_payload):
-    result = normalise_mqtt_spa(mqtt_spa_payload)
-    expected_keys = {
-        "errors",
-        "temperatureF",
-        "setpointF",
-        "pump1",
-        "pump2",
-        "pump3",
-        "pump4",
-        "pump5",
-        "blower1",
-        "blower2",
-        "lights",
-        "easymode",
-        "fogger",
-        "sds",
-        "yess",
-        "heater1_state",
-        "heater2_state",
-        "filter_status",
-        "economy",
-        "exhaust",
-        "current_adc",
-        "heater_outlet_temp_f",
-        "filter_on",
-        "power_w",
+@pytest.fixture
+def native_live_payload():
+    return {
+        "STemp": 99, "TSP": 97,
+        "P1": 1, "P2": 0, "P3": 2, "P4": 0, "P5": 0,
+        "BL1": 0, "BL2": 0,
+        "Li": 1, "H1": 2, "H2": 0, "Filter": 2, "Fan": 0,
+        "HTemp": 100, "Econ": 0, "Current": 30, "AllOn": 0,
+        "Fogger": 0, "SDS": 0, "Yess": 0,
     }
-    assert expected_keys.issubset(result.keys())
 
 
-def test_normalise_mqtt_spa_temperatures(mqtt_spa_payload):
-    result = normalise_mqtt_spa(mqtt_spa_payload)
+def test_normalise_native_live_temperatures(native_live_payload):
+    result = normalise_native_live(native_live_payload)
     assert result["temperatureF"] == 99
     assert result["setpointF"] == 97
 
 
-def test_normalise_mqtt_spa_pump_int_to_string_off(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["pump1"] = 0
-    result = normalise_mqtt_spa(payload)
-    assert result["pump1"] == "off"
-
-
-def test_normalise_mqtt_spa_pump_int_to_string_low(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["pump1"] = 1
-    result = normalise_mqtt_spa(payload)
+def test_normalise_native_live_pump_states(native_live_payload):
+    result = normalise_native_live(native_live_payload)
     assert result["pump1"] == "low"
+    assert result["pump2"] == "off"
+    assert result["pump3"] == "high"
 
 
-def test_normalise_mqtt_spa_pump_int_to_string_high(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["pump1"] = 2
-    result = normalise_mqtt_spa(payload)
+def test_normalise_native_live_pump_high_firmware_quirk():
+    result = normalise_native_live({"P1": 20})
     assert result["pump1"] == "high"
 
 
-def test_normalise_mqtt_spa_filter_status_idle(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["filter"] = 0
-    result = normalise_mqtt_spa(payload)
-    assert result["filter_status"] == "idle"
+def test_normalise_native_live_lights_bool(native_live_payload):
+    result = normalise_native_live(native_live_payload)
+    assert result["lights"] is True
 
 
-def test_normalise_mqtt_spa_filter_status_filtering(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["filter"] = 2
-    result = normalise_mqtt_spa(payload)
-    assert result["filter_status"] == "filtering"
-
-
-def test_normalise_mqtt_spa_heater1_state_idle(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["heater1"] = 0
-    result = normalise_mqtt_spa(payload)
-    assert result["heater1_state"] == "idle"
-
-
-def test_normalise_mqtt_spa_heater1_state_heating(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["heater1"] = 2
-    result = normalise_mqtt_spa(payload)
+def test_normalise_native_live_heater_state(native_live_payload):
+    result = normalise_native_live(native_live_payload)
     assert result["heater1_state"] == "heating"
+    assert result["heater2_state"] == "idle"
 
 
-def test_normalise_mqtt_spa_easymode_mapped_from_allOn(mqtt_spa_payload):
-    result = normalise_mqtt_spa(mqtt_spa_payload)
-    assert "easymode" in result
-
-
-def test_normalise_mqtt_spa_power_w_derived(mqtt_spa_payload):
-    # fixture has currentADC=30; round(30 * 1.87) = 56
-    result = normalise_mqtt_spa(mqtt_spa_payload)
-    assert result["power_w"] == 56
-
-
-def test_normalise_mqtt_spa_filter_on_false_when_idle(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["filter"] = 0
-    result = normalise_mqtt_spa(payload)
-    assert result["filter_on"] is False
-
-
-def test_normalise_mqtt_spa_filter_on_true_when_filtering(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["filter"] = 2
-    result = normalise_mqtt_spa(payload)
+def test_normalise_native_live_filter_status(native_live_payload):
+    result = normalise_native_live(native_live_payload)
+    assert result["filter_status"] == "filtering"
     assert result["filter_on"] is True
 
 
-def test_normalise_mqtt_spa_no_connected_key(mqtt_spa_payload):
-    """connected is now derived by mqtt_client, not set by normalise_mqtt_spa."""
-    result = normalise_mqtt_spa(mqtt_spa_payload)
-    assert "connected" not in result
+def test_normalise_native_live_filter_idle():
+    result = normalise_native_live({"Filter": 0})
+    assert result["filter_status"] == "idle"
+    assert result["filter_on"] is False
 
 
-def test_normalise_mqtt_spa_errors_default_empty_list(mqtt_spa_payload):
-    result = normalise_mqtt_spa(mqtt_spa_payload)
+def test_normalise_native_live_power_derived(native_live_payload):
+    result = normalise_native_live(native_live_payload)
+    assert result["current_adc"] == 30
+    assert result["power_w"] == round(30 * 1.87)
+
+
+def test_normalise_native_live_connected_always_true(native_live_payload):
+    result = normalise_native_live(native_live_payload)
+    assert result["connected"] is True
+
+
+def test_normalise_native_live_errors_default_empty(native_live_payload):
+    result = normalise_native_live(native_live_payload)
     assert result["errors"] == []
 
 
-def test_normalise_mqtt_spa_unknown_keys_ignored(mqtt_spa_payload):
-    payload = dict(mqtt_spa_payload)
-    payload["unknownKey"] = "should_be_ignored"
-    result = normalise_mqtt_spa(payload)
-    assert "unknownKey" not in result
+def test_normalise_native_live_spaboy_inline():
+    payload = {"sbpH": 767, "sbORP": 650, "sbpHind": 2, "sbORPind": 0}
+    result = normalise_native_live(payload)
+    assert result["ph"] == 7.67
+    assert result["orp"] == 650
+    assert result["ph_status"] == "ok"
+    assert result["orp_status"] == "low"
 
 
-def test_normalise_mqtt_spa_missing_optional_fields_no_keyerror(mqtt_spa_payload):
-    # Remove optional fogger key and verify it doesn't cause a KeyError
-    payload = {k: v for k, v in mqtt_spa_payload.items() if k != "fogger"}
-    result = normalise_mqtt_spa(payload)
-    assert "fogger" not in result
-
-
-def test_normalise_mqtt_spa_missing_filter_no_filter_on(mqtt_spa_payload):
-    payload = {k: v for k, v in mqtt_spa_payload.items() if k != "filter"}
-    result = normalise_mqtt_spa(payload)
-    assert "filter_status" not in result
+def test_normalise_native_live_missing_keys_not_in_output():
+    result = normalise_native_live({"STemp": 99})
+    assert result["temperatureF"] == 99
+    assert "pump1" not in result
     assert "filter_on" not in result
-
-
-def test_normalise_mqtt_spa_missing_current_adc_no_power_w(mqtt_spa_payload):
-    payload = {k: v for k, v in mqtt_spa_payload.items() if k != "currentADC"}
-    result = normalise_mqtt_spa(payload)
-    assert "current_adc" not in result
     assert "power_w" not in result
 
 
-# ── normalise_mqtt_filters ────────────────────────────────────────────────────
-
-
-def test_normalise_mqtt_filters_happy_path(mqtt_filters_payload):
-    # fixture has filterState=2
-    existing = {"temperatureF": 99}
-    result = normalise_mqtt_filters(mqtt_filters_payload, existing)
-    assert result["filter_status"] == "filtering"
-    assert result["filter_on"] is True
-
+def test_normalise_native_live_blower_normalised():
+    result = normalise_native_live({"BL1": 5, "BL2": 0})
+    assert result["blower1"] == 1
+    assert result["blower2"] == 0
 
-def test_normalise_mqtt_filters_filterstate_zero_idle():
-    payload = {"filterState": 0}
-    existing = {"temperatureF": 99}
-    result = normalise_mqtt_filters(payload, existing)
-    assert result["filter_status"] == "idle"
-    assert result["filter_on"] is False
 
+def test_normalise_native_live_boolean_fields():
+    result = normalise_native_live({"Econ": 1, "AllOn": 1, "Fogger": 1, "SDS": 1, "Yess": 1})
+    assert result["economy"] is True
+    assert result["easymode"] is True
+    assert result["fogger"] is True
+    assert result["sds"] is True
+    assert result["yess"] is True
 
-def test_normalise_mqtt_filters_merges_without_losing_other_keys(mqtt_filters_payload):
-    existing = {"temperatureF": 99, "pump1": "off"}
-    result = normalise_mqtt_filters(mqtt_filters_payload, existing)
-    assert result["temperatureF"] == 99
-    assert result["pump1"] == "off"
-    assert result["filter_status"] == "filtering"
 
+# ── normalise_native_sett ────────────────────────────────────────────────────
 
-def test_normalise_mqtt_filters_absent_filterstate_leaves_existing_unchanged():
-    payload = {"version": 0, "serialNums": "abc"}  # no filterState
-    existing = {"filter_status": "idle", "filter_on": False}
-    result = normalise_mqtt_filters(payload, existing)
-    assert result["filter_status"] == "idle"
-    assert result["filter_on"] is False
 
+def test_normalise_native_sett_setpoint():
+    existing: dict = {}
+    normalise_native_sett({"TSP": 100}, existing)
+    assert existing["setpointF"] == 100
 
-def test_normalise_mqtt_filters_returns_existing_dict(mqtt_filters_payload):
-    existing = {}
-    result = normalise_mqtt_filters(mqtt_filters_payload, existing)
-    assert result is existing
 
+def test_normalise_native_sett_filter_schedule():
+    existing: dict = {}
+    normalise_native_sett({"FF": 4, "FD": 2}, existing)
+    assert existing["filtration_frequency"] == 4
+    assert existing["filtration_duration"] == 2
 
-# ── decode_error_bitmask ───────────────────────────────────────────────────────
 
+def test_normalise_native_sett_spaboy_targets():
+    existing: dict = {}
+    normalise_native_sett({"SBORPhi": 655, "SBORPlo": 645, "SBpHhi": 760, "SBpHlo": 720}, existing)
+    assert existing["spaboy_orp_high"] == 655
+    assert existing["spaboy_orp_low"] == 645
+    assert existing["spaboy_ph_high"] == 760
+    assert existing["spaboy_ph_low"] == 720
 
-def test_decode_single_error():
-    # bit 8 = ER 08: PH High
-    assert decode_error_bitmask(0x100) == ["ER 08: PH High"]
 
+def test_normalise_native_sett_absent_fields_unchanged():
+    existing = {"setpointF": 97}
+    normalise_native_sett({}, existing)
+    assert existing["setpointF"] == 97
 
-def test_decode_sentinel_only():
-    # bit 61 is the firmware sentinel — not an error
-    assert decode_error_bitmask(0x2000000000000000) == []
 
+# ── normalise_native_error ───────────────────────────────────────────────────
 
-def test_decode_sentinel_plus_error():
-    # fixture value: 0x2000000000000100 = sentinel + bit 8
-    assert decode_error_bitmask(0x2000000000000100) == ["ER 08: PH High"]
 
+def test_normalise_native_error_no_errors():
+    existing: dict = {}
+    normalise_native_error({}, existing)
+    assert existing["errors"] == []
 
-def test_decode_zero():
-    assert decode_error_bitmask(0) == []
 
+def test_normalise_native_error_single_error():
+    existing: dict = {}
+    normalise_native_error({"ERR0": True}, existing)
+    assert existing["errors"] == ["ER 00: No Flow"]
 
-def test_decode_multiple_errors():
-    # bit 2 (ER 02 Heater Over Temp) + bit 7 (ER 07 Freeze Protect)
-    result = decode_error_bitmask(0x4 | 0x80)
-    assert result == ["ER 02: Heater Over Temp", "ER 07: Freeze Protect"]
 
+def test_normalise_native_error_multiple_errors():
+    existing: dict = {}
+    normalise_native_error({"ERR1": True, "ERR7": True}, existing)
+    assert "ER 01: Flow Switch" in existing["errors"]
+    assert "ER 07: Freeze Protect" in existing["errors"]
 
-def test_decode_all_named_single_bit_errors():
-    expected = [
-        (0x00000001, "ER 00: No Flow"),
-        (0x00000002, "ER 01: Flow Switch"),
-        (0x00000004, "ER 02: Heater Over Temp"),
-        (0x00000008, "ER 03: Spa Over Temp"),
-        (0x00000010, "ER 04: Spa Temp Probe"),
-        (0x00000020, "ER 05: Spa High Limit"),
-        (0x00000040, "ER 06: Eeprom Error"),
-        (0x00000080, "ER 07: Freeze Protect"),
-        (0x00000100, "ER 08: PH High"),
-        (0x00000200, "ER 09: Heater Probe Disconnected"),
-        (0x00000400, "ER 10: Heater Probe Test Failed"),
-        (0x00000800, "ER 11: SpaBoy Comms Error"),
-        (0x00001000, "ER 12: Heater/Spa Calibration"),
-        (0x00002000, "ER 13: Heater Way Above Spa"),
-        (0x00004000, "ER 14: ORP Not Responding"),
-        (0x00008000, "ER 15: PH Low"),
-        (0x00010000, "ER 16: Reserved"),
-        (0x00040000, "ER 18: Reserved"),
-        (0x00080000, "ER 19: Reserved"),
-        (0x00100000, "ER 20: Pump 1 Low — No Current"),
-        (0x00200000, "ER 21: Pump 1 High — No Current"),
-        (0x00400000, "ER 22: Pump 2 — No Current"),
-        (0x00800000, "ER 23: Pump 3 — No Current"),
-        (0x01000000, "ER 24: SDS — No Current"),
-        (0x02000000, "ER 25: YESS — No Current"),
-        (0x04000000, "ER 26: Ozone — No Current"),
-        (0x08000000, "ER 27: Heater 1 — No Current"),
-        (0x10000000, "ER 28: Heater 2 — No Current"),
-    ]
-    for bitmask, label in expected:
-        result = decode_error_bitmask(bitmask)
-        assert label in result, f"{label} not decoded from bitmask {bitmask:#010x}"
 
+def test_normalise_native_error_false_not_included():
+    existing: dict = {}
+    normalise_native_error({"ERR0": False, "ERR1": True}, existing)
+    assert len(existing["errors"]) == 1
+    assert "ER 01: Flow Switch" in existing["errors"]
 
-def test_decode_unknown_bits_ignored():
-    # Bits 29-60 are not in the table — should produce no output
-    assert decode_error_bitmask(0x20000000) == []
 
+def test_normalise_native_error_unlabeled_index_skipped():
+    existing: dict = {}
+    normalise_native_error({"ERR6": True}, existing)
+    assert existing["errors"] == []
 
-# ── normalise_mqtt_errors ─────────────────────────────────────────────────────
 
+# ── resolve_native_capabilities ──────────────────────────────────────────────
 
-def test_normalise_mqtt_errors_nonzero_code(mqtt_errors_payload):
-    # fixture has code=0x2000000000000100 (sentinel bit 61 + pH_08 bit 8)
-    existing = {}
-    result = normalise_mqtt_errors(mqtt_errors_payload, existing)
-    assert result["errors"] == ["ER 08: PH High"]
 
+def test_resolve_native_capabilities_basic():
+    settings = {"cfgP2": True, "cfgP3": True, "cfgSB": True, "cfgEx": True}
+    caps = resolve_native_capabilities(settings)
+    assert caps.pump2 is True
+    assert caps.pump3 is True
+    assert caps.spaboy is True
+    assert caps.has_exhaust is True
+    assert caps.has_easymode is False
+    assert caps.has_filter_suspension is False
 
-def test_normalise_mqtt_errors_sentinel_only():
-    # 0x2000000000000000 = firmware sentinel with no actual error bits set
-    payload = {"version": 1, "code": 0x2000000000000000}
-    existing = {}
-    result = normalise_mqtt_errors(payload, existing)
-    assert result["errors"] == []
 
+def test_resolve_native_capabilities_cloud_mode():
+    settings = {"cfgP2": True, "cfgSB": True}
+    caps = resolve_native_capabilities(settings, is_cloud=True)
+    assert caps.has_easymode is True
+    assert caps.has_filter_suspension is True
 
-def test_normalise_mqtt_errors_zero_code():
-    payload = {"version": 1, "code": 0}
-    existing = {}
-    result = normalise_mqtt_errors(payload, existing)
-    assert result["errors"] == []
 
+def test_resolve_native_capabilities_firmware_versions():
+    settings = {"LPCFWVer": "1.2.61", "YOCFWVer": "3.1.66"}
+    caps = resolve_native_capabilities(settings)
+    assert caps.firmware_lpc == "1.2.61"
+    assert caps.firmware_yocto == "3.1.66"
 
-def test_normalise_mqtt_errors_absent_code():
-    payload = {"version": 1}
-    existing = {}
-    result = normalise_mqtt_errors(payload, existing)
-    assert result["errors"] == []
 
-
-def test_normalise_mqtt_errors_merges_into_existing():
-    payload = {"code": 0}
-    existing = {"temperatureF": 99, "connected": True}
-    result = normalise_mqtt_errors(payload, existing)
-    assert result["temperatureF"] == 99
-    assert result["connected"] is True
-    assert result["errors"] == []
-
-
-def test_normalise_mqtt_errors_returns_existing_dict(mqtt_errors_payload):
-    existing = {}
-    result = normalise_mqtt_errors(mqtt_errors_payload, existing)
-    assert result is existing
-
-
-# ── normalise_mqtt_spaboy ─────────────────────────────────────────────────────
-
-
-def test_normalise_mqtt_spaboy_ph_conversion():
-    # ph = 767 (raw ×100) → 7.67
-    result = normalise_mqtt_spaboy({"ph": 767, "orp": 650}, {})
-    assert result["ph"] == 7.67
-    assert result["orp"] == 650
-
-
-def test_normalise_mqtt_spaboy_ph_color_ok():
-    # phColor 2 = OK
-    result = normalise_mqtt_spaboy({"ph": 700, "phColor": 2, "orp": 600, "orpColor": 2}, {})
-    assert result["ph_status"] == "ok"
-    assert result["orp_status"] == "ok"
-
-
-def test_normalise_mqtt_spaboy_all_color_values():
-    colors = {0: "low", 1: "caution_low", 2: "ok", 3: "caution_high", 4: "high"}
-    for code, expected in colors.items():
-        result = normalise_mqtt_spaboy({"ph": 700, "phColor": code}, {})
-        assert result["ph_status"] == expected, f"phColor {code} → {result['ph_status']!r}"
-
-
-def test_normalise_mqtt_spaboy_unknown_color_defaults_to_ok():
-    result = normalise_mqtt_spaboy({"ph": 700, "phColor": 99}, {})
-    assert result["ph_status"] == "ok"
-
-
-def test_normalise_mqtt_spaboy_absent_fields_skipped():
-    # Only ph present — orp/status keys must not appear
-    result = normalise_mqtt_spaboy({"ph": 750}, {})
-    assert "ph" in result
-    assert "orp" not in result
-    assert "orp_status" not in result
-
-
-def test_normalise_mqtt_spaboy_null_fields_skipped():
-    result = normalise_mqtt_spaboy({"ph": None, "orp": None}, {})
-    assert "ph" not in result
-    assert "orp" not in result
-
-
-def test_normalise_mqtt_spaboy_merges_into_existing():
-    existing = {"temperatureF": 102, "connected": True}
-    result = normalise_mqtt_spaboy({"ph": 720, "orp": 680}, existing)
-    assert result["temperatureF"] == 102
-    assert result["ph"] == 7.20
-
-
-def test_normalise_mqtt_spaboy_returns_existing_dict():
-    existing = {}
-    result = normalise_mqtt_spaboy({"ph": 700, "orp": 600}, existing)
-    assert result is existing
-
-
-# ── normalise_mqtt_settings_spa ───────────────────────────────────────────────
-
-
-def test_normalise_mqtt_settings_spa_filter_duration():
-    payload = {"filterDuration": {"min": 1, "max": 24, "current": 4}}
-    result = normalise_mqtt_settings_spa(payload, {})
-    assert result["filtration_duration"] == 4
-
-
-def test_normalise_mqtt_settings_spa_filter_frequency():
-    payload = {"filterFrequency": {"min": 1, "max": 8, "current": 2}}
-    result = normalise_mqtt_settings_spa(payload, {})
-    assert result["filtration_frequency"] == 2
-
-
-def test_normalise_mqtt_settings_spa_both_fields():
-    payload = {
-        "filterDuration": {"min": 1, "max": 24, "current": 6},
-        "filterFrequency": {"min": 1, "max": 8, "current": 3},
-    }
-    result = normalise_mqtt_settings_spa(payload, {})
-    assert result["filtration_duration"] == 6
-    assert result["filtration_frequency"] == 3
-
-
-def test_normalise_mqtt_settings_spa_missing_current_skipped():
-    # RangeValue present but current is None — should not set key
-    payload = {"filterDuration": {"min": 1, "max": 24, "current": None}}
-    result = normalise_mqtt_settings_spa(payload, {})
-    assert "filtration_duration" not in result
-
-
-def test_normalise_mqtt_settings_spa_non_dict_skipped():
-    # Unexpected scalar value — should not crash or set key
-    payload = {"filterDuration": 4}
-    result = normalise_mqtt_settings_spa(payload, {})
-    assert "filtration_duration" not in result
-
-
-def test_normalise_mqtt_settings_spa_absent_fields_unchanged():
-    existing = {"temperatureF": 100, "filtration_duration": 3}
-    result = normalise_mqtt_settings_spa({}, existing)
-    assert result["filtration_duration"] == 3  # unchanged
-
-
-def test_normalise_mqtt_settings_spa_returns_existing_dict():
-    existing = {}
-    result = normalise_mqtt_settings_spa({"filterDuration": {"current": 4}}, existing)
-    assert result is existing
+def test_resolve_native_capabilities_empty_settings():
+    caps = resolve_native_capabilities({})
+    assert caps.pump2 is False
+    assert caps.spaboy is False
+    assert caps.has_power_sensor is True
+    assert caps.has_errors is True

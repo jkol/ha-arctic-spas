@@ -18,76 +18,25 @@ import asyncio
 import json
 import logging
 import re
-import sys
-import time
 from pathlib import Path
 from typing import Any, Callable
 
 import aiohttp
 
 from .api import ArcticSpaApiError, ArcticSpaClientBase
-from .spa_data import POWER_CALIBRATION, SpaCapabilities
+from .spa_data import (
+    SpaCapabilities,
+    normalise_native_error,
+    normalise_native_live,
+    normalise_native_sett,
+    resolve_native_capabilities,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 _WS_PORT = 8765
 _RECONNECT_DELAYS = (5, 10, 30, 60, 120)
-_MAC_RECOVERY_THRESHOLD = 3  # consecutive failures before trying MAC-based IP recovery
-
-# Map WebSocket "live" topic keys to canonical state dict keys.
-_LIVE_KEY_MAP: dict[str, str] = {
-    "STemp": "temperatureF",
-    "TSP": "setpointF",
-    "P1": "pump1",
-    "P2": "pump2",
-    "P3": "pump3",
-    "P4": "pump4",
-    "P5": "pump5",
-    "BL1": "blower1",
-    "BL2": "blower2",
-    "Li": "lights",
-    "H1": "heater1_state",
-    "H2": "heater2_state",
-    "Filter": "filter_status",
-    "Fan": "exhaust",
-    "HTemp": "heater_outlet_temp_f",
-    "Econ": "economy",
-    "Current": "current_adc",
-    "AllOn": "easymode",
-    "Fogger": "fogger",
-    "SDS": "sds",
-    "Yess": "yess",
-}
-
-_PUMP_STATUS_MAP: dict[int, str] = {0: "off", 1: "low", 2: "high"}
-_FILTER_STATUS_MAP: dict[int, str] = {
-    0: "idle", 1: "purge", 2: "filtering", 3: "suspended",
-    4: "overtemperature", 5: "resuming", 6: "boost", 7: "sanitize",
-}
-_HEATER_STATUS_MAP: dict[int, str] = {
-    0: "idle", 1: "warmup", 2: "heating", 3: "cooldown",
-}
-
-_SPABOY_COLOR_MAP: dict[int, str] = {
-    0: "low", 1: "caution_low", 2: "ok", 3: "caution_high", 4: "high",
-}
-
-# Error labels from the Customer Portal source (arcticLabels.enums.ts).
-_ERROR_LABELS: dict[int, str] = {
-    0: "No Flow",
-    1: "Flow Switch",
-    2: "Heater Over Temperature",
-    3: "Spa Over Temperature",
-    4: "Spa Temperature Probe",
-    5: "Spa High Limit",
-    7: "Freeze Protect",
-    8: "PH High",
-    9: "Heater Probe Disconnected",
-    11: "SpaBoy Comm Error",
-    13: "Heater Way Above Water Temp",
-    14: "ORP Not Responding To Production",
-    15: "PH Too Low (<6.5)",
-}
+_MAC_RECOVERY_THRESHOLD = 3
 
 
 _MAC_RE = re.compile(r"([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}")
@@ -169,90 +118,6 @@ async def async_resolve_ip_for_mac(mac: str) -> str | None:
     return None
 
 
-def _normalise_ws_live(payload: dict[str, Any]) -> dict[str, Any]:
-    """Translate a WebSocket 'live' topic payload to the canonical state dict."""
-    result: dict[str, Any] = {
-        "connected": True,
-        "errors": [],
-        "data_timestamp": time.monotonic(),
-    }
-
-    for ws_key, canonical_key in _LIVE_KEY_MAP.items():
-        if ws_key not in payload:
-            continue
-        value = payload[ws_key]
-
-        if canonical_key in ("pump1", "pump2", "pump3", "pump4", "pump5"):
-            if isinstance(value, int):
-                # New firmware uses values >15 for "high" in the portal UI
-                if value > 15:
-                    value = "high"
-                else:
-                    value = _PUMP_STATUS_MAP.get(value, "off")
-        elif canonical_key == "filter_status":
-            if isinstance(value, int):
-                value = _FILTER_STATUS_MAP.get(value, "idle")
-        elif canonical_key in ("heater1_state", "heater2_state"):
-            if isinstance(value, int):
-                value = _HEATER_STATUS_MAP.get(value, "idle")
-        elif canonical_key in ("lights", "easymode", "economy", "exhaust", "fogger", "sds", "yess"):
-            value = bool(value)
-        elif canonical_key in ("blower1", "blower2"):
-            value = int(bool(value))
-
-        result[canonical_key] = value
-
-    if "filter_status" in result:
-        result["filter_on"] = result["filter_status"] != "idle"
-
-    if "current_adc" in result:
-        adc = result["current_adc"]
-        if isinstance(adc, (int, float)):
-            result["power_w"] = round(adc * POWER_CALIBRATION)
-
-    # SpaBoy data is inline in the live topic on this firmware
-    if payload.get("sbpH") is not None:
-        result["ph"] = round(payload["sbpH"] / 100.0, 2)
-    if payload.get("sbORP") is not None:
-        result["orp"] = payload["sbORP"]
-    if payload.get("sbpHind") is not None:
-        result["ph_status"] = _SPABOY_COLOR_MAP.get(payload["sbpHind"], "ok")
-    if payload.get("sbORPind") is not None:
-        result["orp_status"] = _SPABOY_COLOR_MAP.get(payload["sbORPind"], "ok")
-
-    return result
-
-
-def _normalise_ws_sett(payload: dict[str, Any], existing: dict[str, Any]) -> None:
-    """Merge a WebSocket 'sett' topic payload into the canonical state dict."""
-    if payload.get("TSP") is not None:
-        existing["setpointF"] = payload["TSP"]
-    if payload.get("FF") is not None:
-        existing["filtration_frequency"] = payload["FF"]
-    if payload.get("FD") is not None:
-        existing["filtration_duration"] = payload["FD"]
-
-    # SpaBoy ORP targets
-    if payload.get("SBORPhi") is not None:
-        existing["spaboy_orp_high"] = payload["SBORPhi"]
-    if payload.get("SBORPlo") is not None:
-        existing["spaboy_orp_low"] = payload["SBORPlo"]
-    if payload.get("SBpHhi") is not None:
-        existing["spaboy_ph_high"] = payload["SBpHhi"]
-    if payload.get("SBpHlo") is not None:
-        existing["spaboy_ph_low"] = payload["SBpHlo"]
-
-
-def _normalise_ws_error(payload: dict[str, Any], existing: dict[str, Any]) -> None:
-    """Merge a WebSocket 'error' topic payload into the canonical state dict."""
-    errors: list[str] = []
-    for i in range(64):
-        key = f"ERR{i}"
-        if payload.get(key):
-            label = _ERROR_LABELS.get(i, "")
-            if label:
-                errors.append(f"ER {i:02d}: {label}")
-    existing["errors"] = errors
 
 
 class ArcticSpaWebSocketClient(ArcticSpaClientBase):
@@ -553,7 +418,7 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
 
     def _handle_topic(self, topic: str, payload: dict[str, Any]) -> None:
         if topic == "live":
-            new_data = _normalise_ws_live(payload)
+            new_data = normalise_native_live(payload)
             self._state.update(new_data)
             if not self._first_live_received.is_set():
                 self._first_live_received.set()
@@ -562,7 +427,7 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
 
         elif topic == "sett":
             self._settings = payload.copy()
-            _normalise_ws_sett(payload, self._state)
+            normalise_native_sett(payload, self._state)
             if not self._config_ready.is_set():
                 self._config_ready.set()
             if self._on_update:
@@ -572,7 +437,7 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
             self._config = payload.copy()
 
         elif topic == "error":
-            _normalise_ws_error(payload, self._state)
+            normalise_native_error(payload, self._state)
             if self._on_update:
                 self._on_update(self._state.copy())
 
@@ -584,42 +449,3 @@ class ArcticSpaWebSocketClient(ArcticSpaClientBase):
             _LOGGER.debug("WebSocket: diagnostic: %s", payload)
 
 
-def resolve_ws_capabilities(
-    settings: dict[str, Any],
-    state: dict[str, Any],
-) -> SpaCapabilities:
-    """Resolve capabilities from the WebSocket 'sett' payload.
-
-    The 'sett' topic includes cfgP1..cfgP5, cfgB1, cfgB2, cfgSB, etc. —
-    boolean flags indicating which hardware is installed.
-    """
-    return SpaCapabilities(
-        pump2=bool(settings.get("cfgP2", False)),
-        pump3=bool(settings.get("cfgP3", False)),
-        pump4=bool(settings.get("cfgP4", False)),
-        pump5=bool(settings.get("cfgP5", False)),
-        blower1=bool(settings.get("cfgB1", False)),
-        blower2=bool(settings.get("cfgB2", False)),
-        sds=bool(settings.get("cfgSDS", False)),
-        yess=bool(settings.get("cfgYESS", False)),
-        fogger=bool(settings.get("cfgFG", False)),
-        spaboy=bool(settings.get("cfgSB", False)),
-        has_power_sensor=True,
-        has_exhaust=bool(settings.get("cfgEx", False)),
-        has_economy=True,
-        has_heater_outlet_temp=True,
-        has_heater_states=True,
-        has_filter_data=True,
-        has_filter_schedule=True,
-        has_filter_details=False,
-        has_filter_suspension=False,  # WS live topic has no filter_suspension state feedback
-        has_spaboy_diagnostics=False,  # WS live only provides pH/ORP, not electrode data
-        has_spaboy_boost=bool(settings.get("cfgSB", False)),
-        has_easymode=False,  # WS protocol has no easymode toggle command
-        has_errors=True,
-        has_network_info=False,
-        has_rfid=bool(settings.get("cfgRFID", False)),
-        has_peak_settings=False,
-        firmware_lpc=str(settings.get("LPCFWVer")) if settings.get("LPCFWVer") else None,
-        firmware_yocto=str(settings.get("YOCFWVer")) if settings.get("YOCFWVer") else None,
-    )
