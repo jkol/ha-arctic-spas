@@ -1,38 +1,26 @@
 """Constants for the Arctic Spas integration."""
 from enum import StrEnum
-from typing import Final
 
 DOMAIN = "arctic_spas"
-API_BASE_URL = "https://api.myarcticspa.com"
-DEFAULT_POLL_INTERVAL = 30  # seconds
 
-CONF_API_KEY = "api_key"
-
-# v0.2.0 — multi-mode connection constants (canonical names)
 CONF_MODE = "mode"
-CONF_MQTT_USERNAME = "mqtt_username"
-CONF_MQTT_PASSWORD = "mqtt_password"
+
+# Direct mode (local WebSocket)
 CONF_LOCAL_HOST = "local_host"
 CONF_LOCAL_MAC = "local_mac"
+
+# Cloud mode (dealer API + AWS IoT MQTT)
+CONF_CLOUD_EMAIL = "cloud_email"
+CONF_CLOUD_PASSWORD = "cloud_password"
+CONF_CLOUD_SPA_ID = "cloud_spa_id"
+CONF_CLOUD_DEALERSHIP_ID = "cloud_dealership_id"
 
 
 class ConnectionMode(StrEnum):
     """Connection mode identifiers for config entry data."""
 
-    REST  = "rest"
-    MQTT  = "mqtt"
-    LOCAL = "local"
-
-
-# ---------------------------------------------------------------------------
-# v0.1.x legacy constants — kept for config entry migration only.
-# Do NOT use these in new code. WS-B (config_flow) and WS-E (__init__) will
-# migrate existing entries and remove all references.
-# ---------------------------------------------------------------------------
-CONF_CONNECTION_MODE = "connection_mode"   # old key → replaced by CONF_MODE
-CONF_HOST = "host"                          # old key → replaced by CONF_LOCAL_HOST
-CONNECTION_MODE_CLOUD = "cloud"             # old value → migrates to ConnectionMode.REST
-CONNECTION_MODE_LOCAL = "local"             # old value → migrates to ConnectionMode.LOCAL
+    DIRECT = "direct"
+    CLOUD = "cloud"
 
 
 # Pump states

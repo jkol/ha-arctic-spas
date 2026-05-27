@@ -8,58 +8,51 @@
           "mode": "Connection mode"
         },
         "data_description": {
-          "mode": "REST requires only an API key (recommended). MQTT provides real-time updates and power monitoring but requires your My Arctic Spa username and password. Local requires your spa's IP address and needs no internet connection."
+          "mode": "Direct connects to the spa over your local network (no internet required). Cloud connects via the My Arctic Spa portal using your login credentials."
         }
       },
-      "rest": {
-        "title": "REST API (Cloud)",
-        "description": "Enter your My Arctic Spa API key. Generate one at [{api_key_url}]({api_key_url})",
-        "data": {
-          "api_key": "API Key"
-        }
-      },
-      "mqtt": {
-        "title": "Cloud MQTT",
-        "description": "Enter your My Arctic Spa app credentials. Your password is hashed before storage — plaintext is never saved.",
-        "data": {
-          "mqtt_username": "Username",
-          "mqtt_password": "Password"
-        }
-      },
-      "local": {
-        "title": "Local (no internet)",
-        "description": "Enter your spa's local IP address. Connects directly to the spa over your local network — no cloud dependency.",
+      "direct": {
+        "title": "Direct Connection",
+        "description": "Enter your spa's local IP address. Connects directly to the spa over your local network. A DHCP reservation is recommended.",
         "data": {
           "local_host": "Spa IP Address"
         }
       },
-      "reconfigure_local": {
+      "cloud": {
+        "title": "Cloud Connection",
+        "description": "Enter your My Arctic Spa portal credentials (dealer.myarcticspa.com).",
+        "data": {
+          "cloud_email": "Email / Username",
+          "cloud_password": "Password"
+        }
+      },
+      "cloud_select_spa": {
+        "title": "Select Spa",
+        "description": "Your account has multiple spas. Choose which one to add.",
+        "data": {
+          "spa_id": "Spa"
+        }
+      },
+      "reconfigure_direct": {
         "title": "Update Spa IP Address",
         "description": "Enter the spa's new local IP address. A DHCP reservation is recommended to prevent future changes.",
         "data": {
           "local_host": "Spa IP Address"
         }
       },
-      "reconfigure_rest": {
-        "title": "Update API Key",
-        "description": "Enter your new My Arctic Spa API key. Generate one at [{api_key_url}]({api_key_url})",
+      "reconfigure_cloud": {
+        "title": "Update Cloud Credentials",
+        "description": "Enter your updated My Arctic Spa portal credentials.",
         "data": {
-          "api_key": "API Key"
-        }
-      },
-      "reconfigure_mqtt": {
-        "title": "Update MQTT Credentials",
-        "description": "Enter your updated My Arctic Spa app credentials.",
-        "data": {
-          "mqtt_username": "Username",
-          "mqtt_password": "Password"
+          "cloud_email": "Email / Username",
+          "cloud_password": "Password"
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to spa. Check your network and try again.",
       "invalid_auth": "Invalid credentials. Please check and try again.",
-      "port_not_open": "Cannot reach the spa on the specified port. Ensure the spa is reachable on your local network.",
+      "no_spas": "No spas found on this account.",
       "unknown": "Unexpected error. Check the Home Assistant logs for details."
     },
     "abort": {

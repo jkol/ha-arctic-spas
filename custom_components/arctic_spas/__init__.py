@@ -12,6 +12,10 @@ from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import ArcticSpaApiError
 from .const import (
+    CONF_CLOUD_DEALERSHIP_ID,
+    CONF_CLOUD_EMAIL,
+    CONF_CLOUD_PASSWORD,
+    CONF_CLOUD_SPA_ID,
     CONF_LOCAL_HOST,
     CONF_LOCAL_MAC,
     CONF_MODE,
@@ -49,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Arctic Spa from a config entry."""
     mode = entry.data.get(CONF_MODE)
 
-    if mode == ConnectionMode.LOCAL:
+    if mode == ConnectionMode.DIRECT:
         from .websocket_client import ArcticSpaWebSocketClient  # noqa: PLC0415
 
         host = entry.data[CONF_LOCAL_HOST]
@@ -62,16 +66,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             _LOGGER.info("Persisted new spa IP %s to config entry", new_host)
 
-        client = ArcticSpaWebSocketClient(
+        client: Any = ArcticSpaWebSocketClient(
             host, mac=mac, on_host_changed=_on_host_changed,
         )
         coordinator = ArcticSpaCoordinator(hass, client, push_mode=True)
 
-        def _on_local_update(data: dict[str, Any]) -> None:
+        def _on_direct_update(data: dict[str, Any]) -> None:
             coordinator.async_set_updated_data(data)
 
         try:
-            await client.start(_on_local_update)
+            await client.start(_on_direct_update)
             await coordinator.async_config_entry_first_refresh()
             await client.wait_for_config(timeout=5.0)
         except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
@@ -81,7 +85,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             client.get_settings(),
         )
         _LOGGER.debug(
-            "Local capabilities resolved via WebSocket (LPC %s, YOC %s)",
+            "Direct capabilities resolved (LPC %s, YOC %s)",
+            coordinator.capabilities.firmware_lpc,
+            coordinator.capabilities.firmware_yocto,
+        )
+
+    elif mode == ConnectionMode.CLOUD:
+        from .cloud_client import ArcticSpaCloudClient  # noqa: PLC0415
+
+        client = ArcticSpaCloudClient(
+            email=entry.data[CONF_CLOUD_EMAIL],
+            password=entry.data[CONF_CLOUD_PASSWORD],
+            spa_id=entry.data[CONF_CLOUD_SPA_ID],
+            dealership_id=entry.data[CONF_CLOUD_DEALERSHIP_ID],
+        )
+        coordinator = ArcticSpaCoordinator(hass, client, push_mode=True)
+
+        def _on_cloud_update(data: dict[str, Any]) -> None:
+            coordinator.async_set_updated_data(data)
+
+        try:
+            await client.start(_on_cloud_update)
+            await coordinator.async_config_entry_first_refresh()
+            await client.wait_for_config(timeout=10.0)
+        except (ArcticSpaApiError, OSError, asyncio.TimeoutError) as err:
+            raise ConfigEntryNotReady(str(err)) from err
+
+        coordinator.capabilities = resolve_native_capabilities(
+            client.get_settings(), is_cloud=True,
+        )
+        _LOGGER.debug(
+            "Cloud capabilities resolved (LPC %s, YOC %s)",
             coordinator.capabilities.firmware_lpc,
             coordinator.capabilities.firmware_yocto,
         )
@@ -95,7 +129,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     domain_data = hass.data.setdefault(DOMAIN, {})
     domain_data[entry.entry_id] = coordinator
-    # Store client so unload() can call stop() on MQTT/Local clients.
     domain_data[f"{entry.entry_id}_client"] = client
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
