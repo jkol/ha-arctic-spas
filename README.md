@@ -4,56 +4,53 @@
 [![GitHub Release](https://img.shields.io/github/release/jkol/ha-arctic-spas.svg)](https://github.com/jkol/ha-arctic-spas/releases)
 [![License](https://img.shields.io/github/license/jkol/ha-arctic-spas.svg)](LICENSE)
 
-A HACS-compatible Home Assistant integration for [Arctic Spas](https://www.arcticspas.com/) hot tubs, using the My Arctic Spa API v2.0. Control and monitor your spa directly from Home Assistant.
+A HACS-compatible Home Assistant integration for [Arctic Spas](https://www.arcticspas.com/) hot tubs. Supports two connection modes: **Direct** (local WebSocket, no cloud) and **Cloud** (dealer portal + AWS IoT MQTT).
 
 ## Features
 
 | Platform | Entities | Notes |
 |---|---|---|
 | **Climate** | Water temperature control | Set target temp; current temp display |
-| **Binary Sensor** | Connected, Problem | Connected = online/offline; Problem = active error codes (diagnostic) |
-| **Sensor** | Water temp, setpoint, pH, chlorine (ORP), filter status/duration/frequency, error codes | pH & ORP require Spa Boy® |
-| **Switch** | Lights, Filter, Pumps 2–5, Blowers 1–2, SDS, YESS, Fogger | Optional hardware only shown if present |
-| **Select** | Pump 1 speed | off / low / high |
-| **Button** | Boost, Easy Mode | Boost = heavy chlorination; Easy Mode = all jets on |
+| **Binary Sensor** | Connected, Problem, Exhaust fan, Economy mode | Problem = any active error code (diagnostic) |
+| **Sensor** | Water temp, setpoint, pH, ORP (chlorine), filter status, heater state, power consumption, error codes | pH & ORP require Spa Boy® |
+| **Switch** | Lights, Filter suspension, Pumps 2–5, Blowers 1–2, SDS, YESS, Fogger | Optional hardware only shown if present |
+| **Select** | Pump 1 speed, SpaBoy CL range | off / low / high |
+| **Button** | Filter boost, SpaBoy boost, Easy Mode | |
 | **Number** | Filter frequency, Filter duration | Schedule configuration |
 
-Optional features (Spa Boy®, SDS, YESS, fogger, blowers, pump 4/5) are only exposed when present in your spa's status response.
+Optional features (Spa Boy®, SDS, YESS, fogger, blowers, pump 4/5, exhaust) are only exposed when present in your spa's configuration. Easy Mode and Filter Suspension are Cloud-only.
 
 ## Requirements
 
 - Home Assistant 2024.1.0 or newer
 - [HACS](https://hacs.xyz/) installed
-- A My Arctic Spa API key — generate one at [myarcticspa.com/spa/SpaAPIManagement.aspx](https://myarcticspa.com/spa/SpaAPIManagement.aspx)
+- Arctic Spas hot tub running **YOC firmware 3.x or newer**
+  - Direct mode: spa reachable on your local network
+  - Cloud mode: a My Arctic Spa portal account (dealer.myarcticspa.com)
 
 ## Connection Modes
 
-The integration supports three ways to connect to your spa:
+| Feature | Direct | Cloud |
+|---|---|---|
+| Internet required | No | Yes |
+| Update frequency | ~500ms real-time push | Real-time push |
+| Power monitoring | Yes | Yes |
+| Heater state sensors | Yes | Yes |
+| Economy / exhaust sensors | Yes | Yes |
+| Easy Mode button | — | Yes |
+| Filter suspension | — | Yes |
+| SpaBoy pH/ORP | Yes | Yes |
+| Filter schedule config | Yes | Yes |
 
-| Feature | REST (Cloud) | MQTT (Cloud) | Local |
-|---|---|---|---|
-| Internet required | Yes | Yes | No |
-| Update frequency | Every 30s (poll) | Real-time push (~2-3 min) | Real-time push (~640ms) |
-| Power monitoring | No | Yes | Yes |
-| Heater state sensors | No | Yes | Yes |
-| Economy / exhaust sensors | No | Yes | Yes |
-| Controls (lights, pumps, etc.) | Yes | Yes (MQTT-native) | Yes |
-| SpaBoy pH/ORP | Yes | Yes | Yes |
-| Filter schedule config | Yes | No | No |
+### Direct (recommended)
 
-### REST (recommended for most users)
+Connects directly to the spa over WebSocket on port 8765. No internet required. ~500ms push updates, power monitoring, and full control with just the spa's local IP address.
 
-Uses the My Arctic Spa cloud API with polling every 30 seconds. Requires only an API key. Best for users who don't need real-time updates or power monitoring.
+If the spa's IP changes (e.g. DHCP reassignment), the integration will automatically find the new IP via the spa's MAC address in the ARP table and persist the change.
 
-### MQTT
+### Cloud
 
-Subscribes to cloud MQTT push updates using your My Arctic Spa app username and password. Provides real-time data, power monitoring (via the spa's built-in CT clamp), SpaBoy pH/ORP, and full control — all without an API key.
-
-Your password is hashed with SHA-1 before being used — the plaintext password is stored in HA's encrypted config storage at rest.
-
-### Local (no internet)
-
-Connects directly to the spa on your local network via port 12121 (the LPC firmware interface). Provides ~640ms update latency, power monitoring, and full control with no cloud dependency. Requires knowing the spa's local IP address.
+Authenticates with the My Arctic Spa dealer portal (`dealer.myarcticspa.com`) using your email and password, then connects to AWS IoT Core MQTT for real-time telemetry and commands. Unlocks Easy Mode and Filter Suspension controls not available in Direct mode. Your credentials are stored in HA's encrypted config storage. JWT tokens are refreshed automatically.
 
 ## Installation
 
@@ -72,18 +69,17 @@ Copy `custom_components/arctic_spas/` into your HA `config/custom_components/` d
 
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for **Arctic Spas**
-3. Choose your connection mode (REST, MQTT, or Local) and follow the prompts for that mode
+3. Choose your connection mode and follow the prompts:
+   - **Direct**: enter your spa's local IP address
+   - **Cloud**: enter your My Arctic Spa portal email and password (dealer.myarcticspa.com)
 
-The integration uses a multi-step setup flow:
-- **REST**: enter your My Arctic Spa API key
-- **MQTT**: enter your My Arctic Spa app username and password
-- **Local**: enter your spa's local IP address (and optionally port — default is 12121)
+If your Cloud account has multiple spas, you'll be prompted to choose one.
 
-The integration will create a single device with all supported entities based on your spa's capabilities and connection mode.
+A DHCP reservation is recommended for Direct mode so the spa's IP doesn't change between reboots.
 
 ## Dashboard
 
-The water chemistry sensors work well as gauge cards. Paste these into your Lovelace dashboard YAML (requires Spa Boy®).
+The water chemistry sensors work well as gauge cards. Requires Spa Boy®.
 
 ### pH Level
 
@@ -131,73 +127,55 @@ segments:
 
 ## Technical Notes
 
-### REST mode
-- Status is polled every **30 seconds**
-- A `202` response to a control command means the requested state already matches — this is normal, not an error
-- `503` responses are transient; the integration retries on the next poll cycle
-- Rate limiting: if the API returns `429`, the integration backs off and retries on the next cycle
+### Direct mode
+- WebSocket endpoint: `ws://<spa-ip>:8765`
+- On connect, sends `{"query": 0}` to trigger a full state dump; spa then streams `live` at ~500ms
+- Commands are JSON sent on the same connection (e.g. `{"P1next": 1}`, `{"setTSP": 102}`)
+- Reconnects automatically with exponential backoff (5 s → 10 s → 30 s → 60 s → 120 s)
+- A 30 s WebSocket ping keeps the TCP connection alive; if no data is received for 90 s the connection is dropped and reconnected
+- Power consumption is `current_adc × 1.87 W` (calibrated against an external watt meter)
 
-### MQTT mode
-- The integration subscribes to three topics: `telemetry/spa`, `telemetry/filters`, `telemetry/errors`
-- Updates arrive passively from the broker (~every 2-3 minutes in typical use)
-- After issuing a command, the integration requests a data refresh after 1.5s to pick up the new state
-- JWT tokens are refreshed automatically before expiry — no manual re-authentication needed
-
-### Local mode
-- The spa broadcasts status every ~640ms; the integration processes each frame
-- A keepalive frame is sent every 650ms to maintain the persistent TCP session
-- The spa only allows one local client at a time — connecting displaces any existing client
-- Power consumption is calculated as `current_adc × 1.87 W` (confirmed via external watt meter)
+### Cloud mode
+- Authenticates at `https://dealer-api.myarcticspa.com/api/login` → JWT (RS256, ~1 hr expiry)
+- Connects to AWS IoT Core MQTT over port 443 using WebSocket transport
+- Subscribes to per-spa topics: `live`, `sett`, `const`, `error`, `connection-status`
+- Commands published to `arcticspa/{dealership_id}/{spa_id}/command`
+- Token refreshed automatically via `/api/refresh` before expiry; falls back to full re-login if needed
 
 ## Troubleshooting
 
-### REST mode: "Cannot connect" or "Invalid API key"
-- Verify your API key is correct in the [My Arctic Spa portal](https://myarcticspa.com/spa/SpaAPIManagement.aspx)
-- Ensure your Home Assistant instance has outbound internet access to `api.myarcticspa.com`
-- Check HA logs (**Settings → System → Logs**) for specific error messages
+### Direct mode: "Cannot connect"
+- Confirm the spa's IP address in your router's DHCP client list
+- Ensure port 8765 is reachable from your HA host
+- Verify the spa is running YOC firmware 3.x — earlier firmware uses a different protocol not supported by this integration
+- Check HA logs (**Settings → System → Logs**) for details
 
-### MQTT mode: "Invalid credentials"
-- Double-check your My Arctic Spa app username and password
-- These are the same credentials you use to log in to the My Arctic Spa mobile app
-- If you recently changed your password, update the integration via **Settings → Devices & Services → Arctic Spas → Configure**
+### Cloud mode: "Invalid credentials"
+- Use the email and password for the My Arctic Spa dealer portal (`dealer.myarcticspa.com`), not the mobile app
+- To update credentials: **Settings → Devices & Services → Arctic Spas → Configure**
 
-### MQTT mode: controls don't work (read-only)
-- Controls require an API key in MQTT mode. Without one, the integration is read-only.
-- Add an API key via the integration options (Re-configure) to enable control.
-
-### Local mode: "Cannot connect"
-- Confirm the spa's IP address on your router's DHCP client list
-- Ensure port 12121 is reachable from your HA host (no firewall blocking it)
-- The spa only allows one local client at a time — if another app (e.g. the legacy DirectConnect app) is connected, disconnect it first
-- Note: some firmware versions may not support local mode
+### Cloud mode: "No spas found"
+- Ensure at least one spa is registered to your account in the dealer portal
 
 ### Entities show as "Unavailable"
-- The spa may be offline or unreachable — check the **Connected** binary sensor
-- For REST/MQTT: the API may be temporarily unavailable (503); the integration will recover automatically
-- For Local: the spa's persistent TCP session may have dropped; the integration will reconnect automatically
+- Check the **Connected** binary sensor — if it's off, the spa or network is unreachable
+- Direct mode reconnects automatically; Cloud mode re-authenticates and reconnects automatically
 
-### Optional entities (pH, ORP, blowers, power, etc.) not appearing
-- These entities are only created when the spa reports those features
+### Optional entities not appearing (pH, ORP, blowers, power, etc.)
+- Entities are only created when the spa's `sett` topic reports the hardware as present
 - Spa Boy® is required for pH and ORP sensors
-- Power monitoring (`power_w`, `current_adc`) only appears in MQTT and Local modes
-- Heater state, economy, and exhaust sensors only appear in MQTT and Local modes
-- Check that the hardware is physically connected and enabled in your spa's settings
+- Easy Mode and Filter Suspension are Cloud-only — they will not appear in Direct mode
+- Power and heater state sensors require the spa to report a CT clamp value
 
 ### Commands don't take effect
-- The spa's internal state may prevent certain commands (e.g., temperature changes while in overtemperature state)
-- Check the **Filter Status** and **Errors** sensors for active conditions that may be blocking commands
-- The integration waits 1 second after each command before re-polling to allow the spa time to apply the change
-
-### "Overtemperature" filter status
-- This is normal — when water temperature exceeds the setpoint, the spa suspends filtration until it cools
-- If `filter_suspension` is on, this behavior is expected and intentional
+- Some commands are blocked by the spa's internal state (e.g. temperature change during overtemperature, certain commands during filter boost)
+- Check the **Filter Status** and **Errors** sensors for active blocking conditions
 
 ## Contributing
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you'd like to change.
+Pull requests are welcome. For major changes, please open an issue first.
 
-- Report bugs via [GitHub Issues](https://github.com/jkol/ha-arctic-spas/issues)
-- Feature requests are also welcome via issues
+- Report bugs: [GitHub Issues](https://github.com/jkol/ha-arctic-spas/issues)
 
 ## License
 
