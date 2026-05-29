@@ -1,8 +1,11 @@
 # Arctic Spas — Home Assistant Integration
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-[![GitHub Release](https://img.shields.io/github/release/jkol/ha-arctic-spas.svg)](https://github.com/jkol/ha-arctic-spas/releases)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=jkol&repository=ha-arctic-spas&category=integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/v/release/jkol/ha-arctic-spas)](https://github.com/jkol/ha-arctic-spas/releases)
 [![License](https://img.shields.io/github/license/jkol/ha-arctic-spas.svg)](LICENSE)
+[![HACS Validation](https://github.com/jkol/ha-arctic-spas/actions/workflows/validate.yml/badge.svg)](https://github.com/jkol/ha-arctic-spas/actions/workflows/validate.yml)
+[![hassfest](https://github.com/jkol/ha-arctic-spas/actions/workflows/hassfest.yml/badge.svg)](https://github.com/jkol/ha-arctic-spas/actions/workflows/hassfest.yml)
 
 A HACS-compatible Home Assistant integration for [Arctic Spas](https://www.arcticspas.com/) hot tubs. Supports two connection modes: **Direct** (local WebSocket, no cloud) and **Cloud** (dealer portal + AWS IoT MQTT).
 
