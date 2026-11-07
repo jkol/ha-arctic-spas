@@ -136,7 +136,7 @@ segments:
 - Commands are JSON sent on the same connection (e.g. `{"P1next": 1}`, `{"setTSP": 102}`)
 - Reconnects automatically with exponential backoff (5 s → 10 s → 30 s → 60 s → 120 s)
 - A 30 s WebSocket ping keeps the TCP connection alive; if no data is received for 90 s the connection is dropped and reconnected
-- Power consumption is `current_adc × 1.87 W` (calibrated against an external watt meter)
+- Power consumption is `current_adc × 1.87 W` (calibrated against an external watt meter), plus 1500 W while the heater is in warmup/heating — the current sensor under-reads the heater element (~5.4 kW actual vs ~3.9 kW reported, measured against the utility meter)
 
 ### Cloud mode
 - Authenticates at `https://dealer-api.myarcticspa.com/api/login` → JWT (RS256, ~1 hr expiry)

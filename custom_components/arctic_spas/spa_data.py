@@ -21,6 +21,12 @@ from typing import Any
 
 POWER_CALIBRATION: float = 1.87  # watts per ADC unit — confirmed by external watt meter
 
+# The 1.87 factor holds at pump-level loads but the CT under-reads the heater:
+# against the utility meter the element draws ~5.4 kW while ADC × 1.87 shows
+# ~3.9 kW. Added once (H1/H2 track the same element) while it is energised.
+HEATER_POWER_CORRECTION_W: int = 1500
+HEATER_ENERGISED_STATES: frozenset[str] = frozenset({"warmup", "heating"})
+
 # ── Native format key maps (shared by WebSocket + AWS IoT MQTT) ──────────────
 
 NATIVE_LIVE_KEY_MAP: dict[str, str] = {
@@ -120,7 +126,13 @@ def normalise_native_live(payload: dict[str, Any]) -> dict[str, Any]:
     if "current_adc" in result:
         adc = result["current_adc"]
         if isinstance(adc, (int, float)):
-            result["power_w"] = round(adc * POWER_CALIBRATION)
+            power_w = round(adc * POWER_CALIBRATION)
+            if any(
+                result.get(key) in HEATER_ENERGISED_STATES
+                for key in ("heater1_state", "heater2_state")
+            ):
+                power_w += HEATER_POWER_CORRECTION_W
+            result["power_w"] = power_w
 
     if payload.get("sbpH") is not None:
         result["ph"] = round(payload["sbpH"] / 100.0, 2)

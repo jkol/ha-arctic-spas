@@ -2,6 +2,7 @@
 import pytest
 
 from custom_components.arctic_spas.spa_data import (
+    HEATER_POWER_CORRECTION_W,
     POWER_CALIBRATION,
     SpaCapabilities,
     normalise_native_error,
@@ -75,9 +76,32 @@ def test_normalise_native_live_filter_idle():
 
 
 def test_normalise_native_live_power_derived(native_live_payload):
+    # fixture has H1=2 (heating), so the heater correction applies
     result = normalise_native_live(native_live_payload)
     assert result["current_adc"] == 30
-    assert result["power_w"] == round(30 * 1.87)
+    assert result["power_w"] == round(30 * 1.87) + HEATER_POWER_CORRECTION_W
+
+
+def test_normalise_native_live_power_no_correction_when_heater_idle():
+    result = normalise_native_live({"Current": 326, "H1": 0, "H2": 0})
+    assert result["power_w"] == round(326 * 1.87)
+
+
+def test_normalise_native_live_power_no_correction_in_cooldown():
+    result = normalise_native_live({"Current": 326, "H1": 3, "H2": 3})
+    assert result["power_w"] == round(326 * 1.87)
+
+
+@pytest.mark.parametrize("state", [1, 2])
+def test_normalise_native_live_power_corrected_when_energised(state):
+    result = normalise_native_live({"Current": 2410, "H1": state, "H2": state})
+    # correction is applied once even though both heater fields report active
+    assert result["power_w"] == round(2410 * 1.87) + HEATER_POWER_CORRECTION_W
+
+
+def test_normalise_native_live_power_corrected_single_heater():
+    result = normalise_native_live({"Current": 2410, "H1": 0, "H2": 2})
+    assert result["power_w"] == round(2410 * 1.87) + HEATER_POWER_CORRECTION_W
 
 
 def test_normalise_native_live_connected_always_true(native_live_payload):
