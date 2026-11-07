@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .api import ArcticSpaApiError
+from .cloud_client import ArcticSpaCloudClient
 from .const import (
     CONF_CLOUD_DEALERSHIP_ID,
     CONF_CLOUD_EMAIL,
@@ -92,8 +93,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     elif mode == ConnectionMode.CLOUD:
-        from .cloud_client import ArcticSpaCloudClient  # noqa: PLC0415
-
         client = ArcticSpaCloudClient(
             email=entry.data[CONF_CLOUD_EMAIL],
             password=entry.data[CONF_CLOUD_PASSWORD],

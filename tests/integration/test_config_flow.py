@@ -136,8 +136,8 @@ async def test_direct_timeout(hass):
 
 # ── Cloud mode ───────────────────────────────────────────────────────────────
 
-PATCH_LOGIN = "custom_components.arctic_spas.cloud_client.async_dealer_login"
-PATCH_SPAS = "custom_components.arctic_spas.cloud_client.async_get_spas"
+PATCH_LOGIN = "custom_components.arctic_spas.config_flow.async_dealer_login"
+PATCH_SPAS = "custom_components.arctic_spas.config_flow.async_get_spas"
 
 
 async def test_cloud_successful_single_spa(hass):

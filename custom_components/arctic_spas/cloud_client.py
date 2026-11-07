@@ -14,12 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import ssl
 import uuid
 from typing import Any, Callable
 
 import aiohttp
 import aiomqtt
+from homeassistant.util.ssl import get_default_context
 
 from .api import ArcticSpaApiError, ArcticSpaClientBase
 from .spa_data import (
@@ -267,7 +267,8 @@ class ArcticSpaCloudClient(ArcticSpaClientBase):
             f"&env={_MQTT_ENV}"
         )
 
-        tls_context = ssl.create_default_context()
+        # HA builds and caches this at startup; creating one here blocks the loop
+        tls_context = get_default_context()
 
         self._mqtt_client = aiomqtt.Client(
             hostname=_MQTT_BROKER,

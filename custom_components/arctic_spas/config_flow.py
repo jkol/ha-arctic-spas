@@ -11,6 +11,11 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .cloud_client import (
+    ArcticSpaCloudAuthError,
+    async_dealer_login,
+    async_get_spas,
+)
 from .const import (
     CONF_CLOUD_DEALERSHIP_ID,
     CONF_CLOUD_EMAIL,
@@ -130,11 +135,6 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
             password = user_input[CONF_CLOUD_PASSWORD].strip()
 
             try:
-                from .cloud_client import (  # noqa: PLC0415
-                    ArcticSpaCloudAuthError,
-                    async_dealer_login,
-                    async_get_spas,
-                )
 
                 token = await async_dealer_login(email, password)
                 spas = await async_get_spas(token)
@@ -259,10 +259,6 @@ class ArcticSpaConfigFlow(ConfigFlow, domain=DOMAIN):
             password = user_input[CONF_CLOUD_PASSWORD].strip()
 
             try:
-                from .cloud_client import (  # noqa: PLC0415
-                    ArcticSpaCloudAuthError,
-                    async_dealer_login,
-                )
 
                 await async_dealer_login(email, password)
             except ArcticSpaCloudAuthError:

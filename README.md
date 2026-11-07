@@ -27,7 +27,8 @@ Optional features (Spa Boy®, SDS, YESS, fogger, blowers, pump 4/5, exhaust) are
 
 - Home Assistant 2024.1.0 or newer
 - [HACS](https://hacs.xyz/) installed
-- Arctic Spas hot tub running **YOC firmware 3.x or newer**
+- Arctic Spas hot tub with a **YOC controller** running **YOC firmware 3.x or newer**
+- **Spas with Ecopak controls are not supported.** Ecopak is a different controller platform (it's the one the Arctic Spas DirectConnect app works with), not an older YOC version. It doesn't serve the local WebSocket on port 8765, and its cloud feed doesn't match the YOC topics this integration reads. See [issue #2](https://github.com/jkol/ha-arctic-spas/issues/2).
   - Direct mode: spa reachable on your local network
   - Cloud mode: a My Arctic Spa portal account (dealer.myarcticspa.com)
 
@@ -151,6 +152,7 @@ segments:
 - Confirm the spa's IP address in your router's DHCP client list
 - Ensure port 8765 is reachable from your HA host
 - Verify the spa is running YOC firmware 3.x — earlier firmware uses a different protocol not supported by this integration
+- If Cloud mode logs `settings not received` and Direct mode can't connect to port 8765, the spa probably has Ecopak controls, which aren't supported
 - Check HA logs (**Settings → System → Logs**) for details
 
 ### Cloud mode: "Invalid credentials"
